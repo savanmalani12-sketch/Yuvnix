@@ -12,7 +12,7 @@
 
 | # | File Path | Lines | Bytes | SHA-256 | Description |
 |---|-----------|-------|-------|---------|-------------|
-| 1 | `supabase/schema.sql` | 1391 | 53,911 | `63dd740164ec1031f5a4a881a1953bd72faa8c88ba1ab5750d079108c37db278` | Complete PostgreSQL 17.11 schema DDL, RLS policies, triggers, RPCs, privileges |
+| 1 | `supabase/schema.sql` | 1394 | 54,206 | `959995780297363ed2072c76311b1835f08335c63ecf275236fc3719bfb0abd1` | Complete PostgreSQL 17.11 schema DDL, RLS policies, triggers, RPCs, privileges |
 | 2 | `supabase/tests/fixtures.sql` | 243 | 15,509 | `ae4e19df126e233078e69b60375efc21e4c4ded31c2fc28394335b963ce6dccc` | Disposable test fixtures provisioning auth.users, profiles, rides, carts |
 | 3 | `supabase/tests/cleanup.sql` | 62 | 2,476 | `efd8286853e4d0356f51c16d446a5aa3a52b6b0f0b41c37bcf363ec22b3adb2e` | Idempotent teardown script cascading via auth.users and dedicated test UUIDs |
 | 4 | `supabase/tests/security_tests.sql` | 1011 | 41,956 | `ee944e94c5dfff35a61fb7bcf67f91795d6120bcb993ff2e9bc2299a8852fc8d` | 19 automated security unit tests validating RLS, grants, and auth context |
@@ -24,9 +24,9 @@
 ## File 1 of 6: `supabase/schema.sql`
 
 > **File:** `supabase/schema.sql`  
-> **Lines:** 1391  
-> **Bytes:** 53911  
-> **SHA-256:** `63dd740164ec1031f5a4a881a1953bd72faa8c88ba1ab5750d079108c37db278`  
+> **Lines:** 1394  
+> **Bytes:** 54206  
+> **SHA-256:** `959995780297363ed2072c76311b1835f08335c63ecf275236fc3719bfb0abd1`  
 > **Encoding:** UTF-8  
 
 ```sql
@@ -66,10 +66,12 @@ CREATE TYPE notification_type AS ENUM (
 CREATE TABLE public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     full_name TEXT NOT NULL,
+    username TEXT,
     avatar_url TEXT,
     role user_role NOT NULL DEFAULT 'student',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT username_format CHECK (username IS NULL OR (username ~* '^[a-zA-Z0-9_]{3,20}$'))
 );
 
 -- 2.2 Private Student Profiles (Phone & Email isolated under strict self-only RLS)
@@ -255,6 +257,7 @@ CREATE TABLE public.notifications (
 -- 7. PERFORMANCE INDEXES
 -- =============================================================================
 CREATE INDEX idx_profiles_role ON public.profiles(role);
+CREATE UNIQUE INDEX idx_profiles_username_lower ON public.profiles(lower(username));
 CREATE INDEX idx_communities_slug ON public.communities(slug);
 CREATE INDEX idx_communities_verified ON public.communities(is_verified);
 CREATE INDEX idx_pickup_points_community ON public.community_pickup_points(community_id);
@@ -287,8 +290,8 @@ BEGIN
     INSERT INTO public.profiles (id, full_name, avatar_url, role)
     VALUES (
         NEW.id,
-        COALESCE(NEW.raw_user_meta_data->>'full_name', 'Student'),
-        NEW.raw_user_meta_data->>'avatar_url',
+        COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', 'Student'),
+        COALESCE(NEW.raw_user_meta_data->>'avatar_url', NEW.raw_user_meta_data->>'picture'),
         'student'::user_role
     );
 
@@ -975,9 +978,9 @@ GRANT EXECUTE ON FUNCTION public.mark_notification_as_read(UUID) TO authenticate
 -- 3. TABLE & COLUMN PRIVILEGES MATRIX
 -- =============================================================================
 
--- profiles: Read public directory; update ONLY display name & avatar (role revoked)
+-- profiles: Read public directory; update display name, username & avatar (role revoked)
 GRANT SELECT ON public.profiles TO authenticated;
-GRANT UPDATE (full_name, avatar_url) ON public.profiles TO authenticated;
+GRANT UPDATE (full_name, avatar_url, username) ON public.profiles TO authenticated;
 
 -- profile_private: Self-only SELECT & UPDATE on phone_number
 GRANT SELECT ON public.profile_private TO authenticated;
@@ -1420,6 +1423,7 @@ CREATE POLICY "notifications_update_self_read_only"
     TO authenticated
     USING (user_id = auth.uid())
     WITH CHECK (user_id = auth.uid() AND is_read = true);
+
 
 ```
 

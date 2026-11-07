@@ -25,9 +25,16 @@ export const ProfilePage: React.FC = () => {
               </AvatarFallback>
             </Avatar>
             <div className="space-y-1">
-              <CardTitle className="text-xl">
-                {profile?.full_name || user.user_metadata?.full_name || 'Student Member'}
-              </CardTitle>
+              <div className="flex items-center gap-2 flex-wrap">
+                <CardTitle className="text-xl">
+                  {profile?.full_name || user.user_metadata?.full_name || 'Student Member'}
+                </CardTitle>
+                {profile?.username && (
+                  <span className="text-xs font-mono font-semibold px-2.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                    @{profile.username}
+                  </span>
+                )}
+              </div>
               <CardDescription className="flex items-center gap-1.5">
                 <Mail className="w-3.5 h-3.5" />
                 {user.email}
@@ -47,10 +54,16 @@ export const ProfilePage: React.FC = () => {
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div className="p-3 rounded-xl bg-muted/50 border border-border/50">
+                  <span className="text-muted-foreground block mb-0.5">Student Handle</span>
+                  <span className="font-mono font-semibold text-primary block">
+                    {profile?.username ? `@${profile.username}` : 'Not set'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-muted/50 border border-border/50">
                   <span className="text-muted-foreground block mb-0.5">Authentication</span>
                   <span className="font-semibold text-foreground">Google OAuth 2.0</span>
                 </div>
-                <div className="p-3 rounded-xl bg-muted/50 border border-border/50">
+                <div className="p-3 rounded-xl bg-muted/50 border border-border/50 sm:col-span-2">
                   <span className="text-muted-foreground block mb-0.5">User ID</span>
                   <span className="font-mono text-muted-foreground truncate block">
                     {user.id}

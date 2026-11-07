@@ -34,10 +34,12 @@ CREATE TYPE notification_type AS ENUM (
 CREATE TABLE public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     full_name TEXT NOT NULL,
+    username TEXT,
     avatar_url TEXT,
     role user_role NOT NULL DEFAULT 'student',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT username_format CHECK (username IS NULL OR (username ~* '^[a-zA-Z0-9_]{3,20}$'))
 );
 
 -- 2.2 Private Student Profiles (Phone & Email isolated under strict self-only RLS)
@@ -223,6 +225,7 @@ CREATE TABLE public.notifications (
 -- 7. PERFORMANCE INDEXES
 -- =============================================================================
 CREATE INDEX idx_profiles_role ON public.profiles(role);
+CREATE UNIQUE INDEX idx_profiles_username_lower ON public.profiles(lower(username));
 CREATE INDEX idx_communities_slug ON public.communities(slug);
 CREATE INDEX idx_communities_verified ON public.communities(is_verified);
 CREATE INDEX idx_pickup_points_community ON public.community_pickup_points(community_id);
@@ -255,8 +258,8 @@ BEGIN
     INSERT INTO public.profiles (id, full_name, avatar_url, role)
     VALUES (
         NEW.id,
-        COALESCE(NEW.raw_user_meta_data->>'full_name', 'Student'),
-        NEW.raw_user_meta_data->>'avatar_url',
+        COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', 'Student'),
+        COALESCE(NEW.raw_user_meta_data->>'avatar_url', NEW.raw_user_meta_data->>'picture'),
         'student'::user_role
     );
 
@@ -943,9 +946,9 @@ GRANT EXECUTE ON FUNCTION public.mark_notification_as_read(UUID) TO authenticate
 -- 3. TABLE & COLUMN PRIVILEGES MATRIX
 -- =============================================================================
 
--- profiles: Read public directory; update ONLY display name & avatar (role revoked)
+-- profiles: Read public directory; update display name, username & avatar (role revoked)
 GRANT SELECT ON public.profiles TO authenticated;
-GRANT UPDATE (full_name, avatar_url) ON public.profiles TO authenticated;
+GRANT UPDATE (full_name, avatar_url, username) ON public.profiles TO authenticated;
 
 -- profile_private: Self-only SELECT & UPDATE on phone_number
 GRANT SELECT ON public.profile_private TO authenticated;

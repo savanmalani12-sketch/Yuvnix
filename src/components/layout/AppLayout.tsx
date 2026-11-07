@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { Header } from './Header';
 import { BottomNav } from './BottomNav';
 import { ConfigurationBanner } from '@/components/common/ConfigurationBanner';
+import { UsernameModal } from '@/components/common/UsernameModal';
 
 export const AppLayout: React.FC = () => {
   return (
@@ -12,6 +13,9 @@ export const AppLayout: React.FC = () => {
 
       {/* Top Header */}
       <Header />
+
+      {/* Username Setup Prompt for New Users */}
+      <UsernameModal />
 
       {/* Main Page Slot (pb-20 on mobile to leave clearance for bottom nav) */}
       <div className="flex-1 pb-20 md:pb-8">

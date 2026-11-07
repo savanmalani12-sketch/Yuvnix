@@ -78,9 +78,16 @@ export const Header: React.FC = () => {
                     {getInitials(profile?.full_name || user?.email || 'Student')}
                   </AvatarFallback>
                 </Avatar>
-                <span className="hidden lg:inline text-xs font-medium text-foreground group-hover:text-primary">
-                  {profile?.full_name || 'My Profile'}
-                </span>
+                <div className="hidden lg:flex flex-col text-left">
+                  <span className="text-xs font-semibold text-foreground group-hover:text-primary leading-tight">
+                    {profile?.full_name || 'My Profile'}
+                  </span>
+                  {profile?.username && (
+                    <span className="text-[10px] text-muted-foreground font-mono leading-tight">
+                      @{profile.username}
+                    </span>
+                  )}
+                </div>
               </Link>
               <Button
                 variant="ghost"
