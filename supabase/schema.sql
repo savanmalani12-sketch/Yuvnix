@@ -336,7 +336,25 @@ BEGIN
     FOR SHARE;
 
     IF NOT FOUND THEN
+        -- Parent deletes cascade to cart_items after the parent row is no longer visible.
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RAISE EXCEPTION 'Referenced group cart does not exist.';
+    END IF;
+
+    -- If this is an UPDATE that only touches is_fulfilled, allow host fulfillment tracking (unless cancelled)
+    IF TG_OP = 'UPDATE'
+       AND (OLD.item_name IS NOT DISTINCT FROM NEW.item_name)
+       AND (OLD.quantity IS NOT DISTINCT FROM NEW.quantity)
+       AND (OLD.unit_price_estimate IS NOT DISTINCT FROM NEW.unit_price_estimate)
+       AND (OLD.notes IS NOT DISTINCT FROM NEW.notes)
+       AND (OLD.cart_id IS NOT DISTINCT FROM NEW.cart_id)
+       AND (OLD.added_by_user_id IS NOT DISTINCT FROM NEW.added_by_user_id) THEN
+        IF v_cart_status = 'cancelled'::group_cart_status THEN
+            RAISE EXCEPTION 'Cannot update items in a cancelled cart.';
+        END IF;
+        RETURN NEW;
     END IF;
 
     -- Direct TIMESTAMPTZ comparison against now()
@@ -353,6 +371,55 @@ CREATE TRIGGER trg_enforce_cart_item_lock
     FOR EACH ROW
     EXECUTE FUNCTION public.enforce_cart_item_lock();
 
+-- 4.1b Cart Item Fulfillment Procedure (Host / Staff Only)
+CREATE OR REPLACE FUNCTION public.set_cart_item_fulfillment(
+    p_item_id UUID,
+    p_fulfilled BOOLEAN
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_host_id UUID;
+    v_cart_status group_cart_status;
+BEGIN
+    IF auth.uid() IS NULL THEN
+        RAISE EXCEPTION 'Unauthorized: Active user session required.';
+    END IF;
+
+    SELECT gc.created_by_user_id, gc.status
+    INTO v_host_id, v_cart_status
+    FROM public.cart_items ci
+    JOIN public.group_carts gc ON gc.id = ci.cart_id
+    WHERE ci.id = p_item_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Cart item does not exist.';
+    END IF;
+
+    IF auth.uid() != v_host_id AND NOT public.is_staff_or_admin() THEN
+        RAISE EXCEPTION 'Unauthorized: Only the cart host or staff can update item fulfillment.';
+    END IF;
+
+    IF v_cart_status = 'cancelled'::group_cart_status THEN
+        RAISE EXCEPTION 'Cannot update item fulfillment in a cancelled cart.';
+    END IF;
+
+    UPDATE public.cart_items
+    SET is_fulfilled = p_fulfilled,
+        updated_at = now()
+    WHERE id = p_item_id;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'item_id', p_item_id,
+        'is_fulfilled', p_fulfilled
+    );
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.request_ride_seats(
     p_ride_id UUID,
     p_seats_requested INT
@@ -368,6 +435,7 @@ DECLARE
     v_status shared_ride_status;
     v_departure TIMESTAMPTZ;
     v_host_id UUID;
+    v_community_id UUID;
     v_rider_name TEXT;
     v_existing_status ride_participant_status;
 BEGIN
@@ -381,8 +449,8 @@ BEGIN
 
     -- Lock Hierarchy Level 1: Lock parent shared_rides row with FOR SHARE.
     -- Conflicts with concurrent ride cancellation/closure (FOR NO KEY UPDATE / FOR UPDATE).
-    SELECT available_seats, status, departure_time, created_by_user_id
-    INTO v_available, v_status, v_departure, v_host_id
+    SELECT available_seats, status, departure_time, created_by_user_id, community_id
+    INTO v_available, v_status, v_departure, v_host_id, v_community_id
     FROM public.shared_rides
     WHERE id = p_ride_id
     FOR SHARE;
@@ -393,6 +461,10 @@ BEGIN
 
     IF v_host_id = v_user_id THEN
         RAISE EXCEPTION 'Ride hosts cannot request seats on their own ride.';
+    END IF;
+
+    IF NOT public.is_community_member(v_community_id) AND NOT public.is_staff_or_admin() THEN
+        RAISE EXCEPTION 'Unauthorized: Only active community members can request seats on this ride.';
     END IF;
 
     -- Direct comparison of TIMESTAMPTZ against now()
@@ -461,6 +533,8 @@ AS $$
 DECLARE
     v_host_id UUID := auth.uid();
     v_available INT;
+    v_ride_status shared_ride_status;
+    v_departure_time TIMESTAMPTZ;
     v_seats_requested INT;
     v_current_status ride_participant_status;
 BEGIN
@@ -469,14 +543,23 @@ BEGIN
     END IF;
 
     -- 1. Lock shared_rides row FIRST (Lock Hierarchy Level 1)
-    SELECT available_seats
-    INTO v_available
+    SELECT available_seats, status, departure_time
+    INTO v_available, v_ride_status, v_departure_time
     FROM public.shared_rides
     WHERE id = p_ride_id AND created_by_user_id = v_host_id
     FOR UPDATE;
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Unauthorized: Only the verified ride host can accept seat requests.';
+    END IF;
+
+    -- Enforce ride lifecycle: Reject terminal states and past departures
+    IF v_ride_status IN ('cancelled'::shared_ride_status, 'departed'::shared_ride_status, 'completed'::shared_ride_status) THEN
+        RAISE EXCEPTION 'Cannot accept request: Ride is in terminal status: %.', v_ride_status;
+    END IF;
+
+    IF v_departure_time <= now() THEN
+        RAISE EXCEPTION 'Cannot accept request: Ride departure time has already passed.';
     END IF;
 
     -- 2. Lock ride_participants row SECOND (Lock Hierarchy Level 2)
@@ -615,14 +698,15 @@ DECLARE
     v_current_status ride_participant_status;
     v_total_seats INT;
     v_available_seats INT;
+    v_ride_status shared_ride_status;
 BEGIN
     IF v_caller_id IS NULL THEN
         RAISE EXCEPTION 'Unauthorized: Active user session required.';
     END IF;
 
     -- Lock Hierarchy Level 1: shared_rides
-    SELECT (created_by_user_id = v_caller_id), total_seats, available_seats
-    INTO v_is_host, v_total_seats, v_available_seats
+    SELECT (created_by_user_id = v_caller_id), total_seats, available_seats, status
+    INTO v_is_host, v_total_seats, v_available_seats, v_ride_status
     FROM public.shared_rides
     WHERE id = p_ride_id
     FOR UPDATE;
@@ -656,11 +740,15 @@ BEGIN
     SET status = 'cancelled'::ride_participant_status
     WHERE ride_id = p_ride_id AND user_id = p_participant_user_id;
 
-    -- Restore seats ONLY if the participant was previously accepted
+    -- Restore seats ONLY if the participant was previously accepted, WITHOUT reopening terminal rides
     IF v_current_status = 'accepted'::ride_participant_status THEN
         UPDATE public.shared_rides
         SET available_seats = LEAST(total_seats, available_seats + v_seats_to_release),
-            status = 'open'::shared_ride_status,
+            status = CASE 
+                WHEN v_ride_status IN ('cancelled'::shared_ride_status, 'departed'::shared_ride_status, 'completed'::shared_ride_status) 
+                THEN v_ride_status
+                ELSE 'open'::shared_ride_status 
+            END,
             updated_at = now()
         WHERE id = p_ride_id;
     END IF;
@@ -670,6 +758,69 @@ BEGIN
         'ride_id', p_ride_id,
         'participant_id', p_participant_user_id,
         'seats_released', CASE WHEN v_current_status = 'accepted'::ride_participant_status THEN v_seats_to_release ELSE 0 END
+    );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.cancel_shared_ride(
+    p_ride_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_host_id UUID := auth.uid();
+    v_current_status shared_ride_status;
+BEGIN
+    IF v_host_id IS NULL THEN
+        RAISE EXCEPTION 'Unauthorized: Active user session required.';
+    END IF;
+
+    -- 1. Lock shared_rides row FIRST (Lock Hierarchy Level 1)
+    SELECT status
+    INTO v_current_status
+    FROM public.shared_rides
+    WHERE id = p_ride_id AND created_by_user_id = v_host_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Unauthorized: Only the verified ride host can cancel this ride offer.';
+    END IF;
+
+    IF v_current_status IN ('cancelled'::shared_ride_status, 'departed'::shared_ride_status, 'completed'::shared_ride_status) THEN
+        RAISE EXCEPTION 'Cannot cancel ride: Ride is already in terminal status: %.', v_current_status;
+    END IF;
+
+    -- Update ride status to cancelled
+    UPDATE public.shared_rides
+    SET status = 'cancelled'::shared_ride_status,
+        updated_at = now()
+    WHERE id = p_ride_id;
+
+    -- Cancel all pending and accepted participant reservations and notify ONLY affected riders
+    WITH cancelled_riders AS (
+        UPDATE public.ride_participants
+        SET status = 'cancelled'::ride_participant_status
+        WHERE ride_id = p_ride_id
+          AND status IN ('pending'::ride_participant_status, 'accepted'::ride_participant_status)
+        RETURNING user_id
+    )
+    INSERT INTO public.notifications (user_id, type, title, body, link_url)
+    SELECT 
+        user_id,
+        'ride_seat_declined'::notification_type,
+        'Ride Cancelled by Host',
+        'The ride offer has been cancelled by the host.',
+        '/rides'
+    FROM cancelled_riders
+    WHERE user_id != v_host_id;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'ride_id', p_ride_id,
+        'status', 'cancelled'
     );
 END;
 $$;
@@ -745,21 +896,47 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.is_community_member(
+    p_community_id UUID
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.community_memberships
+        WHERE community_id = p_community_id
+          AND user_id = auth.uid()
+          AND is_active = true
+    );
+$$;
+
 -- =============================================================================
--- 1. BASE SECURITY: REVOKE DEFAULTS FROM PUBLIC AND ANON
+-- 1. BASE SECURITY: REVOKE SUPABASE DEFAULTS FROM CLIENT ROLES
 -- =============================================================================
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon;
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon;
+-- Supabase grants broad public-schema privileges to anon/authenticated by default.
+-- Remove current grants and change defaults so future objects stay closed as well.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM anon, authenticated;
+
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
 
 -- =============================================================================
 -- 2. FUNCTION EXECUTION GRANTS (AUTHENTICATED ONLY)
 -- =============================================================================
 GRANT EXECUTE ON FUNCTION public.is_staff_or_admin() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_community_member(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.set_cart_item_fulfillment(UUID, BOOLEAN) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.request_ride_seats(UUID, INT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.accept_ride_participant(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.decline_ride_participant(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cancel_ride_reservation(UUID, UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.cancel_shared_ride(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.mark_notification_as_read(UUID) TO authenticated;
 
 -- =============================================================================
@@ -774,17 +951,19 @@ GRANT UPDATE (full_name, avatar_url) ON public.profiles TO authenticated;
 GRANT SELECT ON public.profile_private TO authenticated;
 GRANT UPDATE (phone_number) ON public.profile_private TO authenticated;
 
--- communities: Public discovery SELECT; mutations revoked from students
-GRANT SELECT ON public.communities TO authenticated;
+-- communities: Public discovery SELECT; mutations controlled strictly via staff RLS
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.communities TO authenticated;
 
--- community_pickup_points: Member-only SELECT; mutations revoked from students
-GRANT SELECT ON public.community_pickup_points TO authenticated;
+-- community_pickup_points: Member-only SELECT; mutations controlled strictly via staff RLS
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.community_pickup_points TO authenticated;
 
--- community_memberships: Students can join/leave
+-- community_memberships: Students can request join (is_active=false) / leave; staff can activate
 GRANT SELECT, INSERT, DELETE ON public.community_memberships TO authenticated;
+GRANT UPDATE (is_active) ON public.community_memberships TO authenticated;
 
--- community_requests: Students can view & submit
+-- community_requests: Students can view & submit; staff can update review status & notes
 GRANT SELECT, INSERT ON public.community_requests TO authenticated;
+GRANT UPDATE (status, reviewed_by_staff_id, review_notes, created_community_id) ON public.community_requests TO authenticated;
 
 -- group_carts: Community members can view, create & update cart metadata
 GRANT SELECT, INSERT ON public.group_carts TO authenticated;
@@ -794,8 +973,12 @@ GRANT UPDATE (title, store_name, status, lock_at, pickup_instructions) ON public
 GRANT SELECT, INSERT, DELETE ON public.cart_participants TO authenticated;
 
 -- cart_items: Add, view, delete, and update product details ONLY
--- cart_id and added_by_user_id are REVOKED to eliminate foreign key drift
-GRANT SELECT, INSERT, DELETE ON public.cart_items TO authenticated;
+-- cart_id and added_by_user_id are REVOKED to eliminate foreign key drift.
+-- is_fulfilled is REVOKED from direct UPDATE: fulfillment status must be modified
+-- exclusively through the host-only set_cart_item_fulfillment RPC.
+-- is_fulfilled, created_at, updated_at are REVOKED from INSERT to eliminate workflow forgery.
+GRANT SELECT, DELETE ON public.cart_items TO authenticated;
+GRANT INSERT (id, cart_id, added_by_user_id, item_name, quantity, unit_price_estimate, notes) ON public.cart_items TO authenticated;
 GRANT UPDATE (item_name, quantity, unit_price_estimate, notes) ON public.cart_items TO authenticated;
 
 -- cart_messages: Read and send
@@ -880,12 +1063,8 @@ CREATE POLICY "pickup_points_select_members_only"
     ON public.community_pickup_points FOR SELECT
     TO authenticated
     USING (
-        EXISTS (
-            SELECT 1 FROM public.community_memberships cm
-            WHERE cm.community_id = community_pickup_points.community_id
-              AND cm.user_id = auth.uid()
-              AND cm.is_active = true
-        ) OR public.is_staff_or_admin()
+        public.is_community_member(community_id) OR
+        public.is_staff_or_admin()
     );
 
 CREATE POLICY "pickup_points_staff_all"
@@ -902,28 +1081,31 @@ CREATE POLICY "memberships_select_community_or_self"
     TO authenticated
     USING (
         user_id = auth.uid() OR
-        EXISTS (
-            SELECT 1 FROM public.community_memberships cm
-            WHERE cm.community_id = community_memberships.community_id
-              AND cm.user_id = auth.uid()
-        ) OR public.is_staff_or_admin()
+        public.is_community_member(community_id) OR
+        public.is_staff_or_admin()
     );
 
-CREATE POLICY "memberships_insert_self"
+CREATE POLICY "memberships_insert_authorized"
     ON public.community_memberships FOR INSERT
     TO authenticated
     WITH CHECK (
-        auth.uid() = user_id AND
-        EXISTS (
+        public.is_staff_or_admin() OR
+        (auth.uid() = user_id AND is_active = false AND EXISTS (
             SELECT 1 FROM public.communities c
             WHERE c.id = community_id AND c.is_verified = true
-        )
+        ))
     );
+
+CREATE POLICY "memberships_update_staff_only"
+    ON public.community_memberships FOR UPDATE
+    TO authenticated
+    USING (public.is_staff_or_admin())
+    WITH CHECK (public.is_staff_or_admin());
 
 CREATE POLICY "memberships_delete_self"
     ON public.community_memberships FOR DELETE
     TO authenticated
-    USING (auth.uid() = user_id);
+    USING (auth.uid() = user_id OR public.is_staff_or_admin());
 
 -- =============================================================================
 -- RLS 6: COMMUNITY REQUESTS
@@ -957,11 +1139,8 @@ CREATE POLICY "carts_select_community_members"
     ON public.group_carts FOR SELECT
     TO authenticated
     USING (
-        EXISTS (
-            SELECT 1 FROM public.community_memberships cm
-            WHERE cm.community_id = group_carts.community_id
-              AND cm.user_id = auth.uid()
-        ) OR public.is_staff_or_admin()
+        public.is_community_member(community_id) OR
+        public.is_staff_or_admin()
     );
 
 CREATE POLICY "carts_insert_community_members"
@@ -969,11 +1148,7 @@ CREATE POLICY "carts_insert_community_members"
     TO authenticated
     WITH CHECK (
         auth.uid() = created_by_user_id AND
-        EXISTS (
-            SELECT 1 FROM public.community_memberships cm
-            WHERE cm.community_id = group_carts.community_id
-              AND cm.user_id = auth.uid()
-        )
+        public.is_community_member(community_id)
     );
 
 CREATE POLICY "carts_update_host_only"
@@ -991,9 +1166,8 @@ CREATE POLICY "cart_participants_select"
     USING (
         EXISTS (
             SELECT 1 FROM public.group_carts gc
-            JOIN public.community_memberships cm ON cm.community_id = gc.community_id
             WHERE gc.id = cart_participants.cart_id
-              AND cm.user_id = auth.uid()
+              AND (public.is_community_member(gc.community_id) OR public.is_staff_or_admin())
         )
     );
 
@@ -1004,9 +1178,8 @@ CREATE POLICY "cart_participants_insert_self"
         auth.uid() = user_id AND
         EXISTS (
             SELECT 1 FROM public.group_carts gc
-            JOIN public.community_memberships cm ON cm.community_id = gc.community_id
             WHERE gc.id = cart_id
-              AND cm.user_id = auth.uid()
+              AND public.is_community_member(gc.community_id)
               AND gc.status = 'open'::group_cart_status
               AND gc.lock_at > now()
         )
@@ -1026,7 +1199,7 @@ CREATE POLICY "cart_participants_delete_self"
     );
 
 -- =============================================================================
--- RLS 9: CART ITEMS (FOREIGN KEYS PROTECTED VIA COLUMN PRIVILEGES)
+-- RLS 9: CART ITEMS (FOREIGN KEYS & WORKFLOW FIELDS PROTECTED)
 -- =============================================================================
 CREATE POLICY "cart_items_select"
     ON public.cart_items FOR SELECT
@@ -1034,9 +1207,8 @@ CREATE POLICY "cart_items_select"
     USING (
         EXISTS (
             SELECT 1 FROM public.group_carts gc
-            JOIN public.community_memberships cm ON cm.community_id = gc.community_id
             WHERE gc.id = cart_items.cart_id
-              AND cm.user_id = auth.uid()
+              AND (public.is_community_member(gc.community_id) OR public.is_staff_or_admin())
         )
     );
 
@@ -1045,15 +1217,18 @@ CREATE POLICY "cart_items_insert_participants"
     TO authenticated
     WITH CHECK (
         auth.uid() = added_by_user_id AND
+        is_fulfilled = false AND
         EXISTS (
             SELECT 1 FROM public.cart_participants cp
+            JOIN public.group_carts gc ON gc.id = cp.cart_id
             WHERE cp.cart_id = cart_items.cart_id
               AND cp.user_id = auth.uid()
+              AND (public.is_community_member(gc.community_id) OR public.is_staff_or_admin())
         )
     );
 
--- Notice: Ineffective self-comparison removed. Column-level privilege revokes on cart_id & added_by_user_id
--- prevent foreign key drift directly at the engine level.
+-- Column-level privilege revokes on cart_id & added_by_user_id prevent foreign key drift directly.
+-- is_fulfilled update is revoked from client column privileges; item fulfillment is governed strictly by set_cart_item_fulfillment RPC.
 CREATE POLICY "cart_items_update_owner_only"
     ON public.cart_items FOR UPDATE
     TO authenticated
@@ -1068,7 +1243,7 @@ CREATE POLICY "cart_items_delete_owner_or_host"
         EXISTS (
             SELECT 1 FROM public.group_carts gc
             WHERE gc.id = cart_items.cart_id
-              AND gc.created_by_user_id = auth.uid()
+              AND (gc.created_by_user_id = auth.uid() OR public.is_staff_or_admin())
         )
     );
 
@@ -1082,12 +1257,15 @@ CREATE POLICY "cart_messages_select_members_only"
         EXISTS (
             SELECT 1 FROM public.group_carts gc
             WHERE gc.id = cart_messages.cart_id
-              AND gc.created_by_user_id = auth.uid()
-        ) OR
-        EXISTS (
-            SELECT 1 FROM public.cart_participants cp
-            WHERE cp.cart_id = cart_messages.cart_id
-              AND cp.user_id = auth.uid()
+              AND (public.is_community_member(gc.community_id) OR public.is_staff_or_admin())
+              AND (
+                  gc.created_by_user_id = auth.uid() OR
+                  EXISTS (
+                      SELECT 1 FROM public.cart_participants cp
+                      WHERE cp.cart_id = cart_messages.cart_id
+                        AND cp.user_id = auth.uid()
+                  )
+              )
         ) OR public.is_staff_or_admin()
     );
 
@@ -1095,17 +1273,19 @@ CREATE POLICY "cart_messages_insert_members_only"
     ON public.cart_messages FOR INSERT
     TO authenticated
     WITH CHECK (
-        sender_id = auth.uid() AND (
-            EXISTS (
-                SELECT 1 FROM public.group_carts gc
-                WHERE gc.id = cart_messages.cart_id
-                  AND gc.created_by_user_id = auth.uid()
-            ) OR
-            EXISTS (
-                SELECT 1 FROM public.cart_participants cp
-                WHERE cp.cart_id = cart_messages.cart_id
-                  AND cp.user_id = auth.uid()
-            )
+        sender_id = auth.uid() AND
+        EXISTS (
+            SELECT 1 FROM public.group_carts gc
+            WHERE gc.id = cart_messages.cart_id
+              AND (public.is_community_member(gc.community_id) OR public.is_staff_or_admin())
+              AND (
+                  gc.created_by_user_id = auth.uid() OR
+                  EXISTS (
+                      SELECT 1 FROM public.cart_participants cp
+                      WHERE cp.cart_id = cart_messages.cart_id
+                        AND cp.user_id = auth.uid()
+                  )
+              )
         )
     );
 
@@ -1116,11 +1296,8 @@ CREATE POLICY "shared_rides_select_community_members"
     ON public.shared_rides FOR SELECT
     TO authenticated
     USING (
-        EXISTS (
-            SELECT 1 FROM public.community_memberships cm
-            WHERE cm.community_id = shared_rides.community_id
-              AND cm.user_id = auth.uid()
-        ) OR public.is_staff_or_admin()
+        public.is_community_member(community_id) OR
+        public.is_staff_or_admin()
     );
 
 CREATE POLICY "shared_rides_insert_community_members"
@@ -1128,11 +1305,7 @@ CREATE POLICY "shared_rides_insert_community_members"
     TO authenticated
     WITH CHECK (
         auth.uid() = created_by_user_id AND
-        EXISTS (
-            SELECT 1 FROM public.community_memberships cm
-            WHERE cm.community_id = shared_rides.community_id
-              AND cm.user_id = auth.uid()
-        )
+        public.is_community_member(community_id)
     );
 
 CREATE POLICY "shared_rides_update_host_only"

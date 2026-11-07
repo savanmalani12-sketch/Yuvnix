@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase, signInWithGoogle as supabaseSignInGoogle, signOutUser } from '@/services/supabase';
-import type { UserProfile, AuthContextValue, UserRole, Database } from '@/types';
+import type { UserProfile, AuthContextValue } from '@/types';
 import { isSupabaseConfigured } from '@/utils/env';
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -24,38 +24,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq('id', userId)
         .single();
 
-      if (error && error.code !== 'PGRST116') {
-        console.error('Error fetching profile:', error.message);
+      if (error) {
+        if (error.code === 'PGRST116') {
+          // Row not found - auth user exists but trigger profile is missing
+          console.warn(
+            `[useAuth] Profile record not found for authenticated user (${userId}). ` +
+            `Profiles must be provisioned by the database auth.users trigger; client cannot fabricate or insert profiles.`
+          );
+        } else {
+          console.error('[useAuth] Error fetching profile:', error.message);
+        }
         return null;
       }
 
       if (data) {
-        return data as UserProfile;
+        return {
+          ...data,
+          email: email || '',
+        } as UserProfile;
       }
 
-      // If profile does not exist yet (first-time Google login), create profile record
-      if (email) {
-        const newProfile: Database['public']['Tables']['profiles']['Insert'] = {
-          id: userId,
-          email,
-          full_name: email.split('@')[0] || 'Student',
-          role: 'student' as UserRole,
-        };
-
-        const { data: inserted, error: insertError } = await supabase
-          .from('profiles')
-          .insert(newProfile)
-          .select()
-          .single();
-
-        if (!insertError && inserted) {
-          return inserted as UserProfile;
-        }
-      }
-
+      console.warn(`[useAuth] No profile record returned for user (${userId}).`);
       return null;
     } catch (err) {
-      console.error('Unexpected error loading user profile:', err);
+      console.error('[useAuth] Unexpected error loading user profile:', err);
       return null;
     }
   }, []);

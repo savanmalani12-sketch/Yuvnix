@@ -68,7 +68,7 @@ export const CommunityRequestPage: React.FC = () => {
         proposed_name: data.proposed_name,
         proposed_type: data.proposed_type,
         college_affiliation: data.college_affiliation || null,
-        address: data.address,
+        proposed_address: data.address,
         proposed_delivery_pickup_point: data.proposed_delivery_pickup_point,
         proposed_taxi_pickup_point: data.proposed_taxi_pickup_point,
         status: 'pending',
