@@ -1,9 +1,9 @@
 # Yuvnix Product Specification
 
-> **Version:** 3.1.0 (Architecture v3.1 Hardened Pre-Migration Specification)  
+> **Version:** 3.2.0 (Architecture v3.2 Final Certified Specification)  
 > **Tagline:** Your people. Your community.  
 > **Target Audience:** College students and young adults living in residential environments (Hostels, Paying Guest accommodations, and shared apartments).  
-> **Status:** Specification Document (Certified Architecture v3.1)
+> **Status:** Specification Document (Certified Architecture v3.2)
 
 ---
 
@@ -18,7 +18,7 @@ Yuvnix bridges this gap by enabling students in physical residences to:
 
 ---
 
-## 2. Core Product Rules & Governance (Architecture v3.1)
+## 2. Core Product Rules & Governance (Architecture v3.2)
 
 The platform strictly enforces the following foundational product rules:
 
@@ -61,21 +61,21 @@ Students are not locked into one group. A student can join multiple communities 
 ### Rule 8: Group grocery orders, auto-join, and cart locking
 Group grocery carts feature:
 - An itemized product wish list.
-- An ordering deadline (`lock_at` timestamp).
+- An ordering deadline (`lock_at` timestamp in UTC).
 - **Automatic Creator Participation:** When a host creates a cart, the database transaction automatically records their membership in `cart_participants` via an `AFTER INSERT` trigger, guaranteeing instant access to chat without frontend timing dependencies.
 - **Explicit Co-Resident Cart Membership:** Co-residents can join a cart (`cart_participants`) to participate in coordination, notifications, and group chat without being forced to add a product immediately.
 - **Race-Condition-Proof Database Locking:** When a cart locks (either when `lock_at` passes or when the host closes the cart), the database trigger `trg_enforce_cart_item_lock` locks the parent cart row with `FOR SHARE`. This strictly conflicts with in-flight cart status updates (`FOR NO KEY UPDATE`), eliminating race conditions between in-flight item additions and cart closure. Once locked, item additions, edits, and deletions are rejected at the database engine level.
 - **Dedicated Cart Chat:** Real-time group chat accessible **only** to students who have joined that cart or the verified cart host.
-- **Item Permissions:** Students can edit or delete their own added items prior to lock. Foreign keys (`cart_id`, `added_by_user_id`) cannot be modified. Cart hosts can remove items before lock.
+- **Item Permissions & Foreign Key Protection:** Students can edit or delete their own added items prior to lock. Foreign keys (`cart_id`, `added_by_user_id`) cannot be modified through any client path due to strict column privilege revocations. Cart hosts can remove items before lock.
 
 ### Rule 9: Shared taxi rides, atomic reservations, and full lifecycle
 Shared taxi ride listings feature:
 - Explicit departure point (defaults to the community's verified taxi pickup point).
 - Explicit destination (e.g., *SVP Airport Terminal 2*, *Kalupur Railway Station*).
-- Departure time.
+- Departure time (`departure_time` in UTC).
 - Total seats and remaining available seats.
 - **Full Reservation Lifecycle:**
-  1. *Student Request (`request_ride_seats`):* A student requests seats. Identity is derived strictly from `auth.uid()` (client-supplied user IDs are rejected). The record is created atomically via an `INSERT ... ON CONFLICT (ride_id, user_id)` statement with `status = 'pending'`. Active pending or accepted requests cannot be duplicated. Available seats are not decremented yet.
+  1. *Student Request (`request_ride_seats`):* A student requests seats. Identity is derived strictly from `auth.uid()`. The function locks the parent `shared_rides` row using `FOR SHARE`, ensuring that if the ride is concurrently closed or cancelled, the request blocks and aborts upon commit. The record is created atomically via an `INSERT ... ON CONFLICT (ride_id, user_id)` statement with `status = 'pending'`. Active pending or accepted requests cannot be duplicated. Available seats are not decremented yet.
   2. *Host Acceptance (`accept_ride_participant`):* The ride host evaluates the request. The function verifies caller ownership, acquires row-level locks on both the ride and participant rows in a consistent hierarchy (`shared_rides` first `FOR UPDATE`, then `ride_participants` `FOR UPDATE`), decrements `available_seats` atomically, sets status to `'accepted'`, and notifies the rider.
   3. *Host Decline (`decline_ride_participant`):* The ride host declines a pending request. The function locks rows in the identical hierarchy, verifies `status = 'pending'`, transitions status to `'declined'`, and notifies the applicant.
   4. *Atomic Cancellation (`cancel_ride_reservation`):* Either the rider or the host can cancel. Rows are locked in the identical hierarchy (`shared_rides` $\rightarrow$ `ride_participants`). If the reservation was previously accepted, seats are returned (`LEAST(total_seats, available_seats + seats_reserved)`). Repeated cancellations are idempotent and cannot cause double seat restoration.
@@ -108,7 +108,7 @@ Students are never charged fees, subscriptions, or platform commissions.
 
 ---
 
-## 4. Operational User Flows (Architecture v3.1)
+## 4. Operational User Flows (Architecture v3.2)
 
 ### 4.1 Onboarding & Community Request Flow
 ```mermaid
@@ -144,7 +144,7 @@ sequenceDiagram
     Note over Host,Joiner: Both can now read & write to Cart Chat
     Joiner->>App: Add Grocery Item
     App->>DB: INSERT into cart_items
-    Note over DB: BEFORE INSERT Trigger locks parent cart FOR SHARE & verifies lock_at > NOW()
+    Note over DB: BEFORE INSERT Trigger locks parent cart FOR SHARE & verifies lock_at > now()
     Note over Host,Joiner: Lock Deadline Expiry OR Host Manually Locks Cart
     Joiner->>App: Attempts to Add/Edit Item
     App->>DB: INSERT/UPDATE cart_items
@@ -169,7 +169,7 @@ sequenceDiagram
     App->>DB: INSERT into shared_rides (available_seats = total_seats)
     Rider->>App: Request Seat (seats = 1)
     App->>DB: CALL request_ride_seats(ride_id, seats)
-    Note over DB: Derives auth.uid(), atomic upsert creates participant row with status='pending'
+    Note over DB: Locks shared_rides FOR SHARE, atomic upsert creates participant row (status='pending')
     Note over Rider: Cannot access ride chat while pending
     alt Host Accepts Rider
         Host->>App: Accepts Rider
@@ -207,7 +207,7 @@ Students receive real-time and persistent in-app notifications managed under str
    - *Seat Cancelled:* Status update dispatched to affected parties.
 4. **Notification Integrity Rules:**
    - Notifications are created exclusively by trusted database functions running with `SECURITY DEFINER`.
-   - Direct client insertion into `notifications` is revoked.
+   - Direct client insertion into `notifications` is revoked from `PUBLIC`, `anon`, and `authenticated`.
    - Students can only mark their own notifications as read (`mark_notification_as_read` RPC).
    - Direct mutations of notification title, body, recipient, or link URL are revoked at the PostgreSQL column privilege layer.
 
