@@ -21,14 +21,56 @@ import {
   Loader2,
   Lock,
   CheckCircle2,
+  Plus,
+  MessageSquare,
 } from 'lucide-react';
+import { CreateCartModal } from '@/components/carts/CreateCartModal';
+import { CartItemsModal } from '@/components/carts/CartItemsModal';
+import { CartChatModal } from '@/components/carts/CartChatModal';
 
 export const CommunitiesPage: React.FC = () => {
   const [search, setSearch] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
+  const [isCreateCartOpen, setIsCreateCartOpen] = useState(false);
+  const [selectedCommunityForCart, setSelectedCommunityForCart] = useState<string | undefined>(undefined);
+  const [selectedCartIdForItems, setSelectedCartIdForItems] = useState<string | null>(null);
+  const [selectedCartForChat, setSelectedCartForChat] = useState<{ id: string; title: string } | null>(null);
+
   const navigate = useNavigate();
   const { user, isAuthenticated, signInWithGoogle } = useAuth();
   const queryClient = useQueryClient();
+
+  // Fetch active carts inside verified communities
+  const { data: activeCarts = [] } = useQuery({
+    queryKey: ['communities_active_carts'],
+    enabled: isAuthenticated,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('group_carts')
+        .select(`
+          id,
+          community_id,
+          title,
+          store_name,
+          status,
+          lock_at,
+          total_estimated_amount,
+          target_amount,
+          host_initial_amount,
+          created_by:profiles!created_by_user_id(username),
+          cart_items(id)
+        `)
+        .eq('status', 'open')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.warn('Could not fetch active community carts:', error.message);
+        return [];
+      }
+      return data || [];
+    },
+    refetchInterval: 10000,
+  });
 
   // Query live verified communities with optional pickup points (governed by RLS)
   const {
@@ -93,6 +135,13 @@ export const CommunitiesPage: React.FC = () => {
   });
 
   const memberCommunityIds = new Set(myMemberships.map((m) => m.community_id));
+  const myJoinedCommunities = communities
+    .filter((c) => memberCommunityIds.has(c.id))
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      general_area: c.general_area,
+    }));
 
   // Join community mutation (uses atomic RPC join_community, with fallback to table upsert)
   const joinMutation = useMutation({
@@ -239,6 +288,7 @@ export const CommunitiesPage: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {filteredCommunities.map((community) => {
             const isMember = memberCommunityIds.has(community.id);
+            const communityCarts = activeCarts.filter((c) => c.community_id === community.id);
             // In PostgreSQL 1:1 relation, community_pickup_points may be an array of length 0 or 1
             const pickupPoint = Array.isArray(community.community_pickup_points)
               ? community.community_pickup_points[0]
@@ -319,6 +369,149 @@ export const CommunitiesPage: React.FC = () => {
                     )}
                   </div>
 
+                  {/* Active Group Grocery Carts (Directly Inside Community) */}
+                  {isMember ? (
+                    <div className="pt-2 border-t border-border/60 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <ShoppingCart className="w-3.5 h-3.5 text-primary" />
+                          <span className="text-xs font-semibold text-foreground">
+                            Group Grocery Carts
+                          </span>
+                          {communityCarts.length > 0 && (
+                            <Badge variant="secondary" className="text-[10px] h-4 px-1.5 bg-primary/10 text-primary">
+                              {communityCarts.length} active
+                            </Badge>
+                          )}
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setSelectedCommunityForCart(community.id);
+                            setIsCreateCartOpen(true);
+                          }}
+                          className="h-6 px-2 text-[11px] font-semibold text-primary hover:bg-primary/10 gap-1"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Start Cart</span>
+                        </Button>
+                      </div>
+
+                      {communityCarts.length > 0 ? (
+                        <div className="space-y-2">
+                          {communityCarts.map((cart) => {
+                            const creatorHandle =
+                              cart.created_by &&
+                              typeof cart.created_by === 'object' &&
+                              'username' in cart.created_by &&
+                              cart.created_by.username
+                                ? `@${(cart.created_by as { username: string }).username.replace(/^@/, '')}`
+                                : '@resident';
+                            const target = Number(cart.target_amount) || 0;
+                            const total = Number(cart.total_estimated_amount) || 0;
+                            const remaining = Math.max(0, target - total);
+                            const percent = target > 0 ? Math.min(100, Math.round((total / target) * 100)) : 100;
+                            const itemCount = cart.cart_items ? cart.cart_items.length : 0;
+
+                            return (
+                              <div
+                                key={cart.id}
+                                className="p-2.5 rounded-xl bg-background/80 border border-border/70 hover:border-primary/40 transition-all space-y-2"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <Badge variant="outline" className="text-[10px] font-bold h-4 px-1.5 bg-primary/5 text-primary border-primary/30">
+                                        {cart.store_name}
+                                      </Badge>
+                                      <span className="font-semibold text-xs text-foreground truncate">
+                                        {cart.title}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+                                      <span>Host: <strong className="text-foreground/90 font-mono">{creatorHandle}</strong></span>
+                                      <span>•</span>
+                                      <span>{itemCount} {itemCount === 1 ? 'item' : 'items'}</span>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => setSelectedCartIdForItems(cart.id)}
+                                      className="h-6 text-[11px] px-2 font-medium"
+                                    >
+                                      View Items
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setSelectedCartForChat({ id: cart.id, title: cart.title })}
+                                      className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                                      title="Cart Chat"
+                                    >
+                                      <MessageSquare className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
+                                </div>
+
+                                {/* Free delivery progress bar */}
+                                {target > 0 && (
+                                  <div className="space-y-1 bg-muted/30 p-1.5 rounded-lg border border-border/40">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="text-muted-foreground">Free Delivery:</span>
+                                      {remaining === 0 ? (
+                                        <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-0.5">
+                                          <CheckCircle2 className="w-3 h-3" />
+                                          Unlocked! (₹{total})
+                                        </span>
+                                      ) : (
+                                        <span className="text-amber-600 dark:text-amber-400 font-bold">
+                                          ₹{remaining} left to free delivery
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="w-full bg-border/60 rounded-full h-1.5 overflow-hidden">
+                                      <div
+                                        className={`h-full transition-all duration-300 rounded-full ${
+                                          remaining === 0
+                                            ? 'bg-emerald-500'
+                                            : 'bg-gradient-to-r from-amber-500 to-indigo-500'
+                                        }`}
+                                        style={{ width: `${percent}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="p-2.5 rounded-xl bg-muted/20 border border-dashed border-border/70 text-center">
+                          <p className="text-[11px] text-muted-foreground">
+                            No active orders in this hostel. Start a cart to pool delivery fees!
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    communityCarts.length > 0 && (
+                      <div className="pt-2 border-t border-border/60">
+                        <div className="flex items-center justify-between p-2 rounded-xl bg-primary/5 border border-primary/20 text-xs">
+                          <span className="text-muted-foreground font-medium flex items-center gap-1.5">
+                            <ShoppingCart className="w-3.5 h-3.5 text-primary" />
+                            {communityCarts.length} active group {communityCarts.length === 1 ? 'order' : 'orders'}
+                          </span>
+                          <span className="text-[11px] text-primary font-semibold">Join residence to join</span>
+                        </div>
+                      </div>
+                    )
+                  )}
+
                   <div className="flex items-center justify-between pt-2">
                     <span className="text-xs text-muted-foreground flex items-center gap-1">
                       <Users className="w-3.5 h-3.5" />
@@ -384,6 +577,44 @@ export const CommunitiesPage: React.FC = () => {
           }
           actionLabel="Request Your Community"
           onAction={() => navigate('/communities/request')}
+        />
+      )}
+
+      {/* Create Cart Modal */}
+      {isCreateCartOpen && (
+        <CreateCartModal
+          isOpen={isCreateCartOpen}
+          onClose={() => {
+            setIsCreateCartOpen(false);
+            setSelectedCommunityForCart(undefined);
+          }}
+          defaultCommunityId={selectedCommunityForCart}
+          userCommunities={myJoinedCommunities}
+          onCartCreated={() => {
+            queryClient.invalidateQueries({ queryKey: ['communities_active_carts'] });
+          }}
+        />
+      )}
+
+      {/* Cart Items Modal */}
+      {selectedCartIdForItems && (
+        <CartItemsModal
+          cartId={selectedCartIdForItems}
+          isOpen={Boolean(selectedCartIdForItems)}
+          onClose={() => {
+            setSelectedCartIdForItems(null);
+            queryClient.invalidateQueries({ queryKey: ['communities_active_carts'] });
+          }}
+        />
+      )}
+
+      {/* Cart Chat Modal */}
+      {selectedCartForChat && (
+        <CartChatModal
+          cartId={selectedCartForChat.id}
+          cartTitle={selectedCartForChat.title}
+          isOpen={Boolean(selectedCartForChat)}
+          onClose={() => setSelectedCartForChat(null)}
         />
       )}
     </PageContainer>

@@ -303,10 +303,13 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
             <div className="space-y-2">
               {items.map((item) => {
                 const isMine = user?.id === item.added_by_user_id;
-                const addedByName =
-                  item.added_by && typeof item.added_by === 'object' && 'full_name' in item.added_by
-                    ? (item.added_by as { full_name: string }).full_name
-                    : 'Neighbor';
+                const addedByHandle =
+                  item.added_by &&
+                  typeof item.added_by === 'object' &&
+                  'username' in item.added_by &&
+                  item.added_by.username
+                    ? `@${(item.added_by as { username: string }).username.replace(/^@/, '')}`
+                    : '@resident';
 
                 return (
                   <div
@@ -321,7 +324,7 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
                         </Badge>
                       </div>
                       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                        <span>By {isMine ? 'You' : addedByName}</span>
+                        <span className="font-mono">{isMine ? 'You' : addedByHandle}</span>
                         {item.notes && <span className="italic truncate">({item.notes})</span>}
                       </div>
                     </div>

@@ -22,12 +22,12 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    v_creator_name TEXT;
+    v_creator_handle TEXT;
     v_comm_name TEXT;
     v_needed NUMERIC(10, 2);
     v_body TEXT;
 BEGIN
-    SELECT full_name INTO v_creator_name FROM public.profiles WHERE id = NEW.created_by_user_id;
+    SELECT COALESCE('@' || REPLACE(username, '@', ''), 'A neighbor') INTO v_creator_handle FROM public.profiles WHERE id = NEW.created_by_user_id;
     SELECT name INTO v_comm_name FROM public.communities WHERE id = NEW.community_id;
     
     v_needed := CASE 
@@ -37,9 +37,9 @@ BEGIN
     END;
 
     IF v_needed IS NOT NULL AND v_needed > 0 THEN
-        v_body := COALESCE(v_creator_name, 'A neighbor') || ' started a ' || COALESCE(NEW.store_name, 'grocery') || ' cart! Only ₹' || v_needed::INT || ' needed for FREE delivery.';
+        v_body := COALESCE(v_creator_handle, 'A neighbor') || ' started a ' || COALESCE(NEW.store_name, 'grocery') || ' cart! Only ₹' || v_needed::INT || ' needed for FREE delivery.';
     ELSE
-        v_body := COALESCE(v_creator_name, 'A neighbor') || ' started an order at ' || COALESCE(NEW.store_name, 'the store') || '. Add your snacks to share delivery!';
+        v_body := COALESCE(v_creator_handle, 'A neighbor') || ' started an order at ' || COALESCE(NEW.store_name, 'the store') || '. Add your snacks to share delivery!';
     END IF;
 
     -- Insert notifications for all active members in the residence except the cart creator

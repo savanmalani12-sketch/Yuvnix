@@ -12,7 +12,6 @@ import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { supabase } from '@/services/supabase';
 import { useAuth } from '@/hooks/useAuth';
-import { getInitials } from '@/utils/formatters';
 import { MessageSquare, Send, Loader2, Users } from 'lucide-react';
 
 interface CartChatModalProps {
@@ -28,7 +27,7 @@ export const CartChatModal: React.FC<CartChatModalProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const queryClient = useQueryClient();
   const [messageText, setMessageText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -134,9 +133,11 @@ export const CartChatModal: React.FC<CartChatModalProps> = ({
               const isMine = user?.id === msg.sender_id;
               const sender =
                 msg.sender && typeof msg.sender === 'object'
-                  ? (msg.sender as { full_name?: string; username?: string; avatar_url?: string })
+                  ? (msg.sender as { username?: string; avatar_url?: string })
                   : {};
-              const senderName = sender.full_name || (sender.username ? `@${sender.username}` : 'Neighbor');
+              const senderHandle = sender.username ? `@${sender.username.replace(/^@/, '')}` : '@resident';
+              const myHandle = profile?.username ? `@${profile.username.replace(/^@/, '')}` : '@you';
+              const displayHandle = isMine ? myHandle : senderHandle;
 
               const timeStr = new Date(msg.created_at).toLocaleTimeString([], {
                 hour: '2-digit',
@@ -151,16 +152,16 @@ export const CartChatModal: React.FC<CartChatModalProps> = ({
                   {!isMine && (
                     <Avatar className="w-6 h-6 shrink-0 mt-0.5">
                       <AvatarImage src={sender.avatar_url} />
-                      <AvatarFallback className="text-[9px] bg-muted">
-                        {getInitials(senderName)}
+                      <AvatarFallback className="text-[9px] bg-muted font-mono font-bold">
+                        {sender.username ? sender.username.slice(0, 2).toUpperCase() : '@'}
                       </AvatarFallback>
                     </Avatar>
                   )}
 
                   <div className={`space-y-0.5 max-w-[80%] ${isMine ? 'text-right' : 'text-left'}`}>
                     <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground px-1">
-                      <span className="font-semibold text-foreground/80">
-                        {isMine ? 'You' : senderName}
+                      <span className="font-semibold text-foreground/80 font-mono">
+                        {displayHandle}
                       </span>
                       <span>•</span>
                       <span>{timeStr}</span>
