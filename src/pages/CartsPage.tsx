@@ -1,5 +1,5 @@
-import React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
@@ -19,10 +19,45 @@ import {
   ShoppingCart,
   LogIn,
 } from 'lucide-react';
+import { CreateCartModal } from '@/components/carts/CreateCartModal';
+import { CartItemsModal } from '@/components/carts/CartItemsModal';
+import { CartChatModal } from '@/components/carts/CartChatModal';
 
 export const CartsPage: React.FC = () => {
-  const { isAuthenticated, signInWithGoogle } = useAuth();
+  const { user, isAuthenticated, signInWithGoogle } = useAuth();
+  const queryClient = useQueryClient();
 
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [selectedCartIdForItems, setSelectedCartIdForItems] = useState<string | null>(null);
+  const [selectedCartForChat, setSelectedCartForChat] = useState<{ id: string; title: string } | null>(null);
+
+  // Fetch user's joined communities
+  const { data: userCommunities = [] } = useQuery({
+    queryKey: ['my_active_communities', user?.id],
+    enabled: Boolean(user?.id),
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const { data, error } = await supabase
+        .from('community_memberships')
+        .select(`
+          community_id,
+          community:communities!community_id(id, name, general_area)
+        `)
+        .eq('user_id', user.id)
+        .eq('is_active', true);
+
+      if (error) {
+        console.warn('Could not fetch active communities:', error.message);
+        return [];
+      }
+
+      return (data || [])
+        .map((m) => m.community)
+        .filter(Boolean) as { id: string; name: string; general_area: string | null }[];
+    },
+  });
+
+  // Fetch active carts
   const {
     data: carts = [],
     isLoading,
@@ -57,12 +92,20 @@ export const CartsPage: React.FC = () => {
     },
   });
 
+  const handleStartCartClick = () => {
+    if (!isAuthenticated) {
+      signInWithGoogle();
+      return;
+    }
+    setIsCreateOpen(true);
+  };
+
   return (
     <PageContainer
       title="Group Grocery Orders"
       subtitle="Pool grocery items with neighbors to save delivery fees. Group carts feature product lists, lock timers, and private group chat."
       action={
-        <Button className="gap-2 font-semibold">
+        <Button onClick={handleStartCartClick} className="gap-2 font-semibold">
           <PlusCircle className="w-4 h-4" />
           <span>Start Group Cart</span>
         </Button>
@@ -168,12 +211,22 @@ export const CartsPage: React.FC = () => {
                   </div>
 
                   <div className="flex items-center justify-between pt-1">
-                    <Button variant="outline" size="sm" className="gap-1.5 text-xs">
-                      <MessageSquare className="w-3.5 h-3.5" />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSelectedCartForChat({ id: cart.id, title: cart.title })}
+                      className="gap-1.5 text-xs"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
                       <span>Group Chat</span>
                     </Button>
-                    <Button size="sm" variant="default" className="text-xs">
-                      View Items
+                    <Button
+                      size="sm"
+                      variant="default"
+                      onClick={() => setSelectedCartIdForItems(cart.id)}
+                      className="text-xs font-semibold"
+                    >
+                      View Items ({itemsCount})
                     </Button>
                   </div>
                 </CardContent>
@@ -190,9 +243,34 @@ export const CartsPage: React.FC = () => {
           title="No active grocery carts"
           description="There are currently no open grocery carts in your residential communities. Start a cart to order together with your neighbors!"
           actionLabel="Start Group Cart"
-          onAction={() => {}}
+          onAction={handleStartCartClick}
         />
       )}
+
+      {/* Create Cart Modal */}
+      <CreateCartModal
+        isOpen={isCreateOpen}
+        onClose={() => setIsCreateOpen(false)}
+        onCartCreated={() => {
+          queryClient.invalidateQueries({ queryKey: ['group_carts'] });
+        }}
+        userCommunities={userCommunities}
+      />
+
+      {/* Items Modal */}
+      <CartItemsModal
+        cartId={selectedCartIdForItems}
+        isOpen={Boolean(selectedCartIdForItems)}
+        onClose={() => setSelectedCartIdForItems(null)}
+      />
+
+      {/* Chat Modal */}
+      <CartChatModal
+        cartId={selectedCartForChat?.id || null}
+        cartTitle={selectedCartForChat?.title}
+        isOpen={Boolean(selectedCartForChat)}
+        onClose={() => setSelectedCartForChat(null)}
+      />
     </PageContainer>
   );
 };
