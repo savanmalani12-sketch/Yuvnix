@@ -21,6 +21,8 @@ import {
   Sparkles,
   AlertCircle,
   Building2,
+  CheckCircle2,
+  IndianRupee,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -38,10 +40,10 @@ interface CreateCartModalProps {
 }
 
 const QUICK_PRESETS = [
-  { label: '⚡ Zepto Snacks', title: 'Zepto Midnight Snacks', store: 'Zepto', mins: 25 },
-  { label: '🟡 Blinkit Essentials', title: 'Blinkit Quick Delivery', store: 'Blinkit', mins: 30 },
-  { label: '🟠 Instamart Munchies', title: 'Swiggy Instamart Order', store: 'Instamart', mins: 30 },
-  { label: '☕ Chai & Biscuits', title: 'Chai & Snacks Run', store: 'Local Store', mins: 20 },
+  { label: '⚡ Zepto Snacks', title: 'Zepto Midnight Snacks', store: 'Zepto', mins: 25, host: 120, threshold: 199 },
+  { label: '🟡 Blinkit Essentials', title: 'Blinkit Quick Delivery', store: 'Blinkit', mins: 30, host: 100, threshold: 199 },
+  { label: '🟠 Instamart Munchies', title: 'Swiggy Instamart Order', store: 'Instamart', mins: 30, host: 130, threshold: 199 },
+  { label: '☕ Chai & Biscuits', title: 'Chai & Snacks Run', store: 'Local Store', mins: 20, host: 50, threshold: 100 },
 ];
 
 const DURATION_OPTIONS = [
@@ -63,6 +65,8 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
   const [title, setTitle] = useState('');
   const [storeName, setStoreName] = useState('');
   const [durationMinutes, setDurationMinutes] = useState<number>(30);
+  const [hostAmount, setHostAmount] = useState<string>('120');
+  const [freeDeliveryGoal, setFreeDeliveryGoal] = useState<string>('199');
   const [pickupNotes, setPickupNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +87,14 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
     setTitle(preset.title);
     setStoreName(preset.store);
     setDurationMinutes(preset.mins);
+    setHostAmount(preset.host.toString());
+    setFreeDeliveryGoal(preset.threshold.toString());
   };
+
+  const hostNum = parseFloat(hostAmount) || 0;
+  const targetNum = parseFloat(freeDeliveryGoal) || 0;
+  const remainingForFree = Math.max(0, targetNum - hostNum);
+  const progressPercent = targetNum > 0 ? Math.min(100, Math.round((hostNum / targetNum) * 100)) : 0;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -119,7 +130,9 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
           lock_at: lockAt,
           pickup_instructions: pickupNotes.trim() || 'Meet at residence entrance/gate',
           status: 'open',
-          total_estimated_amount: 0,
+          host_initial_amount: hostNum,
+          target_amount: targetNum > 0 ? targetNum : null,
+          total_estimated_amount: hostNum,
         });
 
       if (insertError) {
@@ -131,6 +144,8 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
       setStoreName('');
       setPickupNotes('');
       setDurationMinutes(30);
+      setHostAmount('120');
+      setFreeDeliveryGoal('199');
       onCartCreated();
       onClose();
     } catch (err: unknown) {
@@ -153,7 +168,7 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
             <div>
               <DialogTitle className="text-xl font-bold">Start a Group Cart</DialogTitle>
               <DialogDescription className="text-xs">
-                Pool items with your hostel or PG neighbors to split or eliminate delivery fees.
+                Pool orders with neighbors to hit the store minimum and unlock ₹0 free delivery.
               </DialogDescription>
             </div>
           </div>
@@ -261,6 +276,81 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
               />
             </div>
 
+            {/* Free Delivery Goals: Host Initial Amount + Target Threshold */}
+            <div className="p-3.5 rounded-2xl bg-muted/40 border border-border/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                  <IndianRupee className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Free Delivery Target</span>
+                </span>
+                {remainingForFree === 0 ? (
+                  <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Free Delivery Met!
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400">
+                    ₹{remainingForFree} remaining
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="space-y-1">
+                  <Label htmlFor="host_amount" className="text-[11px] font-semibold text-muted-foreground">
+                    Your Order (₹) <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="host_amount"
+                    type="number"
+                    min="0"
+                    placeholder="120"
+                    value={hostAmount}
+                    onChange={(e) => setHostAmount(e.target.value)}
+                    className="h-9 text-xs"
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="delivery_goal" className="text-[11px] font-semibold text-muted-foreground">
+                    Free Delivery Threshold (₹)
+                  </Label>
+                  <Input
+                    id="delivery_goal"
+                    type="number"
+                    min="0"
+                    placeholder="199"
+                    value={freeDeliveryGoal}
+                    onChange={(e) => setFreeDeliveryGoal(e.target.value)}
+                    className="h-9 text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Progress bar preview */}
+              {targetNum > 0 && (
+                <div className="space-y-1 pt-1">
+                  <div className="w-full bg-border/60 rounded-full h-2 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-300 rounded-full ${
+                        remainingForFree === 0 ? 'bg-emerald-500' : 'bg-primary'
+                      }`}
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-muted-foreground font-medium">
+                    <span>You: ₹{hostNum}</span>
+                    <span>
+                      {remainingForFree > 0
+                        ? `₹${remainingForFree} more needed from neighbors`
+                        : 'Goal unlocked! 🎉'}
+                    </span>
+                    <span>Goal: ₹{targetNum}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Lock Duration Timer */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -289,7 +379,7 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
                 ))}
               </div>
               <p className="text-[10px] text-muted-foreground">
-                Once locked, no new items can be added so the host can place the final order.
+                Once locked, no new items can be added so you can place the final store order.
               </p>
             </div>
 

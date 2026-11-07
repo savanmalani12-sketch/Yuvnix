@@ -18,6 +18,8 @@ import {
   Loader2,
   ShoppingCart,
   LogIn,
+  Zap,
+  CheckCircle2,
 } from 'lucide-react';
 import { CreateCartModal } from '@/components/carts/CreateCartModal';
 import { CartItemsModal } from '@/components/carts/CartItemsModal';
@@ -78,6 +80,8 @@ export const CartsPage: React.FC = () => {
           lock_at,
           pickup_instructions,
           total_estimated_amount,
+          host_initial_amount,
+          target_amount,
           created_at,
           updated_at,
           community:communities(name),
@@ -196,6 +200,47 @@ export const CartsPage: React.FC = () => {
                 </CardHeader>
 
                 <CardContent className="space-y-3 pt-0">
+                  {/* Free Delivery Goal Progress */}
+                  {Boolean(cart.target_amount && Number(cart.target_amount) > 0) && (() => {
+                    const target = Number(cart.target_amount);
+                    const total = Number(cart.total_estimated_amount || 0);
+                    const remaining = Math.max(0, target - total);
+                    const pct = Math.min(100, Math.round((total / target) * 100));
+
+                    return (
+                      <div className="p-2.5 rounded-xl bg-primary/5 border border-primary/20 space-y-1.5 text-xs">
+                        <div className="flex items-center justify-between text-[11px] font-semibold">
+                          <span className="flex items-center gap-1 text-foreground">
+                            <Zap className="w-3 h-3 text-amber-500 fill-amber-500" />
+                            <span>Free Delivery Goal</span>
+                          </span>
+                          {remaining === 0 ? (
+                            <span className="text-emerald-600 font-bold flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Unlocked!
+                            </span>
+                          ) : (
+                            <span className="text-amber-600 dark:text-amber-400 font-bold">
+                              ₹{remaining} more needed
+                            </span>
+                          )}
+                        </div>
+                        <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              remaining === 0 ? 'bg-emerald-500' : 'bg-primary'
+                            }`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-[10px] text-muted-foreground">
+                          <span>Pooled: ₹{total}</span>
+                          <span>Target: ₹{target}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="flex items-center justify-between text-xs py-2 px-3 rounded-xl bg-muted/50 border border-border/50">
                     <span className="flex items-center gap-1 text-muted-foreground">
                       <Clock

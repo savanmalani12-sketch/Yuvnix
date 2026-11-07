@@ -195,14 +195,14 @@ isOneToOne: false
                   ]
                 },"group_carts": {
                   Row: {
-                    "community_id": string,"created_at": string,"created_by_user_id": string,"id": string,"lock_at": string,"pickup_instructions": string | null,"status": Database["public"]['Enums']["group_cart_status"],"store_name": string | null,"title": string,"total_estimated_amount": number,"updated_at": string
+                    "community_id": string,"created_at": string,"created_by_user_id": string,"host_initial_amount": number,"id": string,"lock_at": string,"pickup_instructions": string | null,"status": Database["public"]['Enums']["group_cart_status"],"store_name": string | null,"target_amount": number | null,"title": string,"total_estimated_amount": number,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "community_id": string,"created_at"?: string,"created_by_user_id": string,"id"?: string,"lock_at": string,"pickup_instructions"?: string | null,"status"?: Database["public"]['Enums']["group_cart_status"],"store_name"?: string | null,"title": string,"total_estimated_amount"?: number,"updated_at"?: string
+                    "community_id": string,"created_at"?: string,"created_by_user_id": string,"host_initial_amount"?: number,"id"?: string,"lock_at": string,"pickup_instructions"?: string | null,"status"?: Database["public"]['Enums']["group_cart_status"],"store_name"?: string | null,"target_amount"?: number | null,"title": string,"total_estimated_amount"?: number,"updated_at"?: string
                   }
                   Update: {
-                    "community_id"?: string,"created_at"?: string,"created_by_user_id"?: string,"id"?: string,"lock_at"?: string,"pickup_instructions"?: string | null,"status"?: Database["public"]['Enums']["group_cart_status"],"store_name"?: string | null,"title"?: string,"total_estimated_amount"?: number,"updated_at"?: string
+                    "community_id"?: string,"created_at"?: string,"created_by_user_id"?: string,"host_initial_amount"?: number,"id"?: string,"lock_at"?: string,"pickup_instructions"?: string | null,"status"?: Database["public"]['Enums']["group_cart_status"],"store_name"?: string | null,"target_amount"?: number | null,"title"?: string,"total_estimated_amount"?: number,"updated_at"?: string
                   }
                   Relationships: [
                     {

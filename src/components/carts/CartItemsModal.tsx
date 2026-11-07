@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   Loader2,
   Package,
+  Zap,
 } from 'lucide-react';
 
 interface CartItemsModalProps {
@@ -45,7 +46,7 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
   const [notes, setNotes] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Fetch cart details
+  // Fetch cart details including target_amount and host_initial_amount
   const { data: cart } = useQuery({
     queryKey: ['group_cart_detail', cartId],
     enabled: Boolean(cartId) && isOpen,
@@ -62,6 +63,8 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
           pickup_instructions,
           created_by_user_id,
           total_estimated_amount,
+          host_initial_amount,
+          target_amount,
           community:communities(name)
         `)
         .eq('id', cartId)
@@ -98,32 +101,34 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
     },
   });
 
-  // Add Item Mutation
+  // Add Item Mutation (safe upsert on participant + insert item without revoked is_fulfilled)
   const addItemMutation = useMutation({
     mutationFn: async () => {
       setActionError(null);
       if (!user || !cartId) return;
 
-      // 1. Join cart as participant if not already
+      // 1. Ensure user is marked as participant safely without throwing on duplicates
       await supabase
         .from('cart_participants')
-        .insert({ cart_id: cartId, user_id: user.id })
-        .select()
-        .maybeSingle();
+        .upsert(
+          { cart_id: cartId, user_id: user.id },
+          { onConflict: 'cart_id,user_id', ignoreDuplicates: true }
+        );
 
-      // 2. Insert cart item
+      // 2. Insert cart item (DO NOT supply is_fulfilled: database defaults to false)
       const unitPrice = priceEstimate ? parseFloat(priceEstimate) : null;
-      const { error } = await supabase.from('cart_items').insert({
+      const { error: insertError } = await supabase.from('cart_items').insert({
         cart_id: cartId,
         added_by_user_id: user.id,
         item_name: itemName.trim(),
         quantity: Math.max(1, quantity),
         unit_price_estimate: unitPrice,
         notes: notes.trim() || null,
-        is_fulfilled: false,
       });
 
-      if (error) throw error;
+      if (insertError) {
+        throw insertError;
+      }
     },
     onSuccess: () => {
       setItemName('');
@@ -131,10 +136,13 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
       setPriceEstimate('');
       setNotes('');
       queryClient.invalidateQueries({ queryKey: ['cart_items', cartId] });
+      queryClient.invalidateQueries({ queryKey: ['group_cart_detail', cartId] });
       queryClient.invalidateQueries({ queryKey: ['group_carts'] });
     },
     onError: (err: unknown) => {
-      const msg = err instanceof Error ? err.message : 'Failed to add item';
+      const errObj = err as { message?: string; details?: string };
+      const msg = errObj?.message || errObj?.details || 'Failed to add item';
+      console.error('[AddItem Error]:', err);
       setActionError(msg);
     },
   });
@@ -148,10 +156,12 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cart_items', cartId] });
+      queryClient.invalidateQueries({ queryKey: ['group_cart_detail', cartId] });
       queryClient.invalidateQueries({ queryKey: ['group_carts'] });
     },
     onError: (err: unknown) => {
-      const msg = err instanceof Error ? err.message : 'Failed to remove item';
+      const errObj = err as { message?: string; details?: string };
+      const msg = errObj?.message || errObj?.details || 'Failed to remove item';
       setActionError(msg);
     },
   });
@@ -172,7 +182,8 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
       queryClient.invalidateQueries({ queryKey: ['group_carts'] });
     },
     onError: (err: unknown) => {
-      const msg = err instanceof Error ? err.message : 'Failed to update status';
+      const errObj = err as { message?: string; details?: string };
+      const msg = errObj?.message || errObj?.details || 'Failed to update status';
       setActionError(msg);
     },
   });
@@ -182,15 +193,22 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
     cart && (cart.status !== 'open' || new Date(cart.lock_at).getTime() <= Date.now())
   );
 
-  const totalCalculated = items.reduce((sum, item) => {
+  // Free delivery & pooled calculations
+  const hostAmount = Number(cart?.host_initial_amount || 0);
+  const itemsSum = items.reduce((sum, item) => {
     const price = item.unit_price_estimate ? Number(item.unit_price_estimate) : 0;
     return sum + price * item.quantity;
   }, 0);
+  const grandTotal = hostAmount + itemsSum;
+
+  const targetGoal = cart?.target_amount ? Number(cart.target_amount) : null;
+  const remainingForFree = targetGoal ? Math.max(0, targetGoal - grandTotal) : 0;
+  const progressPercent = targetGoal ? Math.min(100, Math.round((grandTotal / targetGoal) * 100)) : 0;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-lg p-6 sm:rounded-2xl max-h-[90vh] flex flex-col">
-        <DialogHeader className="space-y-1 pb-2 border-b border-border/60">
+      <DialogContent className="max-w-lg p-6 sm:rounded-2xl max-h-[92vh] flex flex-col">
+        <DialogHeader className="space-y-1 pb-3 border-b border-border/60">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
@@ -199,7 +217,7 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
                 </DialogTitle>
                 {cart && <StatusBadge status={cart.status} />}
               </div>
-              <DialogDescription className="text-xs flex items-center gap-2 mt-1 text-muted-foreground">
+              <DialogDescription className="text-xs flex flex-wrap items-center gap-2 mt-1 text-muted-foreground">
                 {cart?.store_name && (
                   <span className="flex items-center gap-1 font-semibold text-foreground">
                     <Store className="w-3.5 h-3.5 text-primary" />
@@ -217,6 +235,45 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
           </div>
         </DialogHeader>
 
+        {/* Free Delivery Tracker Card */}
+        {targetGoal && targetGoal > 0 && (
+          <div className="p-3.5 rounded-2xl bg-primary/5 border border-primary/20 space-y-2 mt-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold flex items-center gap-1.5 text-foreground">
+                <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />
+                <span>Free Delivery Progress</span>
+              </span>
+              {remainingForFree === 0 ? (
+                <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Unlocked! (₹0 Delivery)
+                </span>
+              ) : (
+                <span className="text-xs font-bold text-amber-600 dark:text-amber-400">
+                  ₹{remainingForFree} remaining
+                </span>
+              )}
+            </div>
+
+            <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-300 rounded-full ${
+                  remainingForFree === 0 ? 'bg-emerald-500' : 'bg-primary'
+                }`}
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+
+            <div className="flex justify-between items-center text-[11px] text-muted-foreground font-medium">
+              <span>Host: {formatCurrency(hostAmount)}</span>
+              <span className="font-bold text-foreground">
+                Pooled Total: {formatCurrency(grandTotal)} / {formatCurrency(targetGoal)}
+              </span>
+              <span>Goal: {formatCurrency(targetGoal)}</span>
+            </div>
+          </div>
+        )}
+
         {actionError && (
           <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs font-medium flex items-center justify-between">
             <span>{actionError}</span>
@@ -227,7 +284,7 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
         )}
 
         {/* Scrollable Item List */}
-        <div className="flex-1 overflow-y-auto py-3 space-y-3 pr-1">
+        <div className="flex-1 overflow-y-auto py-2 space-y-2.5 pr-1">
           {isItemsLoading ? (
             <div className="py-12 flex justify-center text-muted-foreground">
               <Loader2 className="w-6 h-6 animate-spin text-primary" />
@@ -235,10 +292,10 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
           ) : items.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground space-y-2">
               <Package className="w-10 h-10 mx-auto text-muted-foreground/40" />
-              <p className="text-xs">No items added yet.</p>
+              <p className="text-xs font-medium">No items pooled yet by neighbors.</p>
               {!isLocked && (
-                <p className="text-[11px] text-muted-foreground">
-                  Be the first to add snacks, milk, bread, or groceries below!
+                <p className="text-[11px] text-muted-foreground max-w-xs mx-auto">
+                  Add your chips, biscuits, drinks, or toiletries below to pool them into this order!
                 </p>
               )}
             </div>
@@ -296,17 +353,23 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
           )}
         </div>
 
-        {/* Total Estimate Footer */}
-        {items.length > 0 && (
-          <div className="p-3 rounded-xl bg-muted/50 border border-border/70 flex items-center justify-between text-xs">
-            <span className="font-medium text-muted-foreground">
-              Total Estimated Pool ({items.length} items):
-            </span>
-            <span className="font-bold text-sm text-foreground">
-              {formatCurrency(totalCalculated)}
-            </span>
+        {/* Total Estimate Breakdown */}
+        <div className="p-3 rounded-xl bg-muted/40 border border-border/70 text-xs space-y-1">
+          {hostAmount > 0 && (
+            <div className="flex justify-between text-muted-foreground text-[11px]">
+              <span>Host Initial Order:</span>
+              <span>{formatCurrency(hostAmount)}</span>
+            </div>
+          )}
+          <div className="flex justify-between text-muted-foreground text-[11px]">
+            <span>Neighbors Pooled Items ({items.length}):</span>
+            <span>{formatCurrency(itemsSum)}</span>
           </div>
-        )}
+          <div className="flex justify-between font-bold text-foreground pt-1 border-t border-border/60">
+            <span>Grand Total:</span>
+            <span className="text-sm">{formatCurrency(grandTotal)}</span>
+          </div>
+        </div>
 
         {/* Add Item Form (Only if cart is open) */}
         {!isLocked ? (
@@ -315,12 +378,12 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
               e.preventDefault();
               if (itemName.trim()) addItemMutation.mutate();
             }}
-            className="pt-3 border-t border-border/70 space-y-2.5"
+            className="pt-2.5 border-t border-border/70 space-y-2"
           >
             <div className="grid grid-cols-12 gap-2">
               <div className="col-span-6">
                 <Input
-                  placeholder="Item name (e.g. Milk 1L, Lays)"
+                  placeholder="Item name (e.g. chips, milk)"
                   value={itemName}
                   onChange={(e) => setItemName(e.target.value)}
                   className="h-9 text-xs"
@@ -344,7 +407,7 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
                   type="number"
                   min="0"
                   step="0.5"
-                  placeholder="Est. ₹ (opt)"
+                  placeholder="Est. ₹ (e.g. 35)"
                   value={priceEstimate}
                   onChange={(e) => setPriceEstimate(e.target.value)}
                   className="h-9 text-xs"
@@ -385,8 +448,8 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
 
         {/* Host Control Actions */}
         {isHost && (
-          <div className="pt-3 border-t border-border/70 flex items-center justify-between gap-2">
-            <span className="text-[11px] font-semibold text-muted-foreground">Host Controls:</span>
+          <div className="pt-2.5 border-t border-border/70 flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold text-muted-foreground">Host Actions:</span>
             <div className="flex items-center gap-1.5">
               {cart?.status === 'open' && (
                 <Button

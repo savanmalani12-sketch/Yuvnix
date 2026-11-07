@@ -13,6 +13,7 @@ import {
   LogOut,
   PlusCircle,
 } from 'lucide-react';
+import { NotificationBell } from './NotificationBell';
 
 export const Header: React.FC = () => {
   const { user, profile, isAuthenticated, signInWithGoogle, signOut } = useAuth();
@@ -68,7 +69,9 @@ export const Header: React.FC = () => {
           </Link>
 
           {isAuthenticated ? (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <NotificationBell />
+
               <Link to="/profile" className="flex items-center gap-2 group">
                 <Avatar className="w-8 h-8">
                   {profile?.avatar_url && (
