@@ -22,6 +22,7 @@ import {
   ArrowLeft,
   Loader2,
 } from 'lucide-react';
+import { MapAddressPicker, type SelectedLocation } from '@/components/common/MapAddressPicker';
 
 export const CommunityRequestPage: React.FC = () => {
   const { user, isAuthenticated, signInWithGoogle } = useAuth();
@@ -29,10 +30,12 @@ export const CommunityRequestPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
+  const [selectedMapLocation, setSelectedMapLocation] = useState<SelectedLocation | null>(null);
 
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
     reset,
   } = useForm<CommunityCreationRequestInput>({
@@ -40,8 +43,15 @@ export const CommunityRequestPage: React.FC = () => {
     defaultValues: {
       proposed_type: 'hostel',
       city: 'Gandhinagar',
+      address: '',
     },
   });
+
+  const handleMapLocationSelect = (loc: SelectedLocation) => {
+    setSelectedMapLocation(loc);
+    setValue('address', loc.address, { shouldValidate: true });
+    setValue('city', loc.city, { shouldValidate: true });
+  };
 
   const onSubmit = async (data: CommunityCreationRequestInput) => {
     if (!isAuthenticated || !user) {
@@ -82,6 +92,7 @@ export const CommunityRequestPage: React.FC = () => {
 
       setIsSuccess(true);
       reset();
+      setSelectedMapLocation(null);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to submit request';
       setSubmissionError(message);
@@ -208,30 +219,19 @@ export const CommunityRequestPage: React.FC = () => {
                 )}
               </div>
 
-              {/* Physical Street Address */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="sm:col-span-2 space-y-2">
-                  <Label htmlFor="address">
-                    Physical Street Address <span className="text-destructive">*</span>
+              {/* Physical Residence Location (Select on Map Only) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>
+                    Residence Location on Map <span className="text-destructive">*</span>
                   </Label>
-                  <Input
-                    id="address"
-                    placeholder="e.g. Near Knowledge Corridor, Raysan"
-                    {...register('address')}
-                  />
-                  {errors.address && (
-                    <p className="text-xs text-destructive">{errors.address.message}</p>
-                  )}
+                  <span className="text-[11px] text-muted-foreground font-medium">GPS Verified</span>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="city">
-                    City <span className="text-destructive">*</span>
-                  </Label>
-                  <Input id="city" placeholder="e.g. Gandhinagar" {...register('city')} />
-                  {errors.city && (
-                    <p className="text-xs text-destructive">{errors.city.message}</p>
-                  )}
-                </div>
+                <MapAddressPicker
+                  value={selectedMapLocation}
+                  onChange={handleMapLocationSelect}
+                  error={errors.address?.message}
+                />
               </div>
 
               {/* Delivery Pickup Point */}
