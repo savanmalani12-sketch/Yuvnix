@@ -1,9 +1,9 @@
 # Yuvnix Product Specification
 
-> **Version:** 3.0.0 (Hardened Pre-Migration Specification)  
+> **Version:** 3.1.0 (Architecture v3.1 Hardened Pre-Migration Specification)  
 > **Tagline:** Your people. Your community.  
 > **Target Audience:** College students and young adults living in residential environments (Hostels, Paying Guest accommodations, and shared apartments).  
-> **Status:** Specification Document (Certified Architecture v3.0)
+> **Status:** Specification Document (Certified Architecture v3.1)
 
 ---
 
@@ -18,7 +18,7 @@ Yuvnix bridges this gap by enabling students in physical residences to:
 
 ---
 
-## 2. Core Product Rules & Governance (Architecture v3.0)
+## 2. Core Product Rules & Governance (Architecture v3.1)
 
 The platform strictly enforces the following foundational product rules:
 
@@ -45,7 +45,7 @@ Students cannot directly spawn public communities. Instead, students submit **Co
 ### Rule 5: Strict non-hierarchical governance & role security
 Submitting a community request or being an early member conveys **no permanent administrative authority, ownership, or special privilege** over fellow residents. 
 - All students participate on equal footing under democratic community rules.
-- **Role Immutability:** Students cannot alter their own account role (`role` remains `student`). Role escalation to `support_staff` or `admin` is rejected at the database trigger layer. Only internal administrative channels can assign elevated roles.
+- **Role Immutability:** Students cannot alter their own account role (`role` remains `student`). Role escalation to `support_staff` or `admin` is rejected at the database trigger layer and revoked from client UPDATE grants. Only internal administrative channels can assign elevated roles.
 
 ### Rule 6: Two-tier location privacy & verified pickup points
 Every approved community has two designated, verified coordinate points:
@@ -53,32 +53,33 @@ Every approved community has two designated, verified coordinate points:
 2. **Shared Taxi Pickup Point**: The designated meetup curb for cab boarding (e.g., *Hostel Circle Gate 1*, *PG Front Parking Bay*).
 - **Two-Tier Privacy Model:**
   - **Tier 1 (Public Discovery):** Community Name, Residential Type, Optional College Tag, City, and General Sector are visible to all authenticated students for discovery.
-  - **Tier 2 (Protected Member-Only Details):** Exact street address, specific delivery foyer/desk instructions, and taxi curb notes are isolated in `community_pickup_points` and accessible **only** to verified, active residents of that community.
+  - **Tier 2 (Protected Member-Only Details):** Exact street address, specific delivery foyer/desk instructions, and taxi curb notes are isolated in `community_pickup_points` and accessible **only** to verified, active residents of that community (`community_memberships.is_active = true`).
 
 ### Rule 7: Multi-community membership
-Students are not locked into one group. A student can join multiple communities (e.g., their current PG, their previous college hostel, and an apartment cluster) and participate in activities across all of them.
+Students are not locked into one group. A student can join multiple communities (e.g., their current PG, their previous college hostel, and a friend's apartment cluster) and participate in activities across all of them.
 
 ### Rule 8: Group grocery orders, auto-join, and cart locking
 Group grocery carts feature:
 - An itemized product wish list.
 - An ordering deadline (`lock_at` timestamp).
-- **Automatic Creator Participation:** When a host creates a cart, the database transaction automatically records their membership in `cart_participants`, guaranteeing instant access to chat without frontend timing dependencies.
+- **Automatic Creator Participation:** When a host creates a cart, the database transaction automatically records their membership in `cart_participants` via an `AFTER INSERT` trigger, guaranteeing instant access to chat without frontend timing dependencies.
 - **Explicit Co-Resident Cart Membership:** Co-residents can join a cart (`cart_participants`) to participate in coordination, notifications, and group chat without being forced to add a product immediately.
-- **Race-Condition-Proof Database Locking:** When a cart locks (either when `lock_at` passes or when the host closes the cart), the database trigger locks the parent cart row with `FOR KEY SHARE` to eliminate race conditions between in-flight item additions and cart closure. Once locked, item additions, edits, and deletions are rejected.
+- **Race-Condition-Proof Database Locking:** When a cart locks (either when `lock_at` passes or when the host closes the cart), the database trigger `trg_enforce_cart_item_lock` locks the parent cart row with `FOR SHARE`. This strictly conflicts with in-flight cart status updates (`FOR NO KEY UPDATE`), eliminating race conditions between in-flight item additions and cart closure. Once locked, item additions, edits, and deletions are rejected at the database engine level.
 - **Dedicated Cart Chat:** Real-time group chat accessible **only** to students who have joined that cart or the verified cart host.
-- **Item Permissions:** Students can edit or delete their own added items prior to lock. Cart hosts can remove items before lock.
+- **Item Permissions:** Students can edit or delete their own added items prior to lock. Foreign keys (`cart_id`, `added_by_user_id`) cannot be modified. Cart hosts can remove items before lock.
 
-### Rule 9: Shared taxi rides, atomic reservations, and lifecycle
+### Rule 9: Shared taxi rides, atomic reservations, and full lifecycle
 Shared taxi ride listings feature:
 - Explicit departure point (defaults to the community's verified taxi pickup point).
 - Explicit destination (e.g., *SVP Airport Terminal 2*, *Kalupur Railway Station*).
 - Departure time.
 - Total seats and remaining available seats.
-- **Two-Step Reservation Lifecycle:**
-  1. *Student Request:* A student requests seats via `request_ride_seats()`. Identity is derived securely from `auth.uid()` (client-supplied user IDs are rejected). The record is created with `status = 'pending'`. Available seats are not decremented yet.
-  2. *Host Acceptance:* The ride host evaluates the request and invokes `accept_ride_participant()`. The function verifies caller ownership, acquires row-level locks on both the ride and participant rows in a consistent hierarchy, decrements `available_seats` atomically, sets status to `accepted`, and notifies the rider.
-- **Anti-Bypass Guarantee:** Students cannot directly update their own participant row to `status = 'accepted'` via table RLS. Direct table mutations are restricted to cancellation.
-- **Atomic Cancellation:** Either the rider or the host can invoke `cancel_ride_reservation()`. Rows are locked in a consistent order (`shared_rides` first, then `ride_participants`). If the reservation was previously accepted, seats are returned (`LEAST(total_seats, available_seats + seats_reserved)`). Repeated cancellations are idempotent and cannot cause double seat restoration.
+- **Full Reservation Lifecycle:**
+  1. *Student Request (`request_ride_seats`):* A student requests seats. Identity is derived strictly from `auth.uid()` (client-supplied user IDs are rejected). The record is created atomically via an `INSERT ... ON CONFLICT (ride_id, user_id)` statement with `status = 'pending'`. Active pending or accepted requests cannot be duplicated. Available seats are not decremented yet.
+  2. *Host Acceptance (`accept_ride_participant`):* The ride host evaluates the request. The function verifies caller ownership, acquires row-level locks on both the ride and participant rows in a consistent hierarchy (`shared_rides` first `FOR UPDATE`, then `ride_participants` `FOR UPDATE`), decrements `available_seats` atomically, sets status to `'accepted'`, and notifies the rider.
+  3. *Host Decline (`decline_ride_participant`):* The ride host declines a pending request. The function locks rows in the identical hierarchy, verifies `status = 'pending'`, transitions status to `'declined'`, and notifies the applicant.
+  4. *Atomic Cancellation (`cancel_ride_reservation`):* Either the rider or the host can cancel. Rows are locked in the identical hierarchy (`shared_rides` $\rightarrow$ `ride_participants`). If the reservation was previously accepted, seats are returned (`LEAST(total_seats, available_seats + seats_reserved)`). Repeated cancellations are idempotent and cannot cause double seat restoration.
+- **Direct Table Mutation Revocation:** Authenticated students have zero direct `UPDATE` privileges on `ride_participants`. All status transitions are governed strictly by the four transactional RPC functions.
 - **Dedicated Ride Chat:** Real-time chat accessible **only** to the ride host and **accepted** ride participants. Students with pending requests cannot read or post messages.
 
 ### Rule 10: Peer-to-peer settlement (No payment gateway in MVP)
@@ -107,7 +108,7 @@ Students are never charged fees, subscriptions, or platform commissions.
 
 ---
 
-## 4. Operational User Flows (Architecture v3.0)
+## 4. Operational User Flows (Architecture v3.1)
 
 ### 4.1 Onboarding & Community Request Flow
 ```mermaid
@@ -143,7 +144,7 @@ sequenceDiagram
     Note over Host,Joiner: Both can now read & write to Cart Chat
     Joiner->>App: Add Grocery Item
     App->>DB: INSERT into cart_items
-    Note over DB: BEFORE INSERT Trigger locks parent cart FOR KEY SHARE & verifies lock_at > NOW()
+    Note over DB: BEFORE INSERT Trigger locks parent cart FOR SHARE & verifies lock_at > NOW()
     Note over Host,Joiner: Lock Deadline Expiry OR Host Manually Locks Cart
     Joiner->>App: Attempts to Add/Edit Item
     App->>DB: INSERT/UPDATE cart_items
@@ -155,7 +156,7 @@ sequenceDiagram
     Joiner->>Host: Direct UPI settlement (Peer-to-Peer)
 ```
 
-### 4.3 Shared Ride Flow & Atomic Reservation
+### 4.3 Shared Ride Flow & Atomic Reservation Lifecycle
 ```mermaid
 sequenceDiagram
     autonumber
@@ -168,14 +169,21 @@ sequenceDiagram
     App->>DB: INSERT into shared_rides (available_seats = total_seats)
     Rider->>App: Request Seat (seats = 1)
     App->>DB: CALL request_ride_seats(ride_id, seats)
-    Note over DB: Derives auth.uid(), creates participant row with status='pending'
+    Note over DB: Derives auth.uid(), atomic upsert creates participant row with status='pending'
     Note over Rider: Cannot access ride chat while pending
-    Host->>App: Reviews & Accepts Rider
-    App->>DB: CALL accept_ride_participant(ride_id, rider_id)
-    Note over DB: Verifies host ownership, locks shared_rides FOR UPDATE, locks ride_participants FOR UPDATE
-    Note over DB: Decrements available_seats atomically, sets status='accepted'
-    DB-->>App: Success (Seats updated atomically, notification dispatched)
-    Note over Host,Rider: Rider now has full access to Ride Chat
+    alt Host Accepts Rider
+        Host->>App: Accepts Rider
+        App->>DB: CALL accept_ride_participant(ride_id, rider_id)
+        Note over DB: Lock Hierarchy: shared_rides (1) -> ride_participants (2) FOR UPDATE
+        Note over DB: Decrements available_seats atomically, sets status='accepted'
+        DB-->>App: Success (Seats updated atomically, notification dispatched)
+        Note over Host,Rider: Rider now has full access to Ride Chat
+    else Host Declines Rider
+        Host->>App: Declines Rider
+        App->>DB: CALL decline_ride_participant(ride_id, rider_id)
+        Note over DB: Lock Hierarchy: shared_rides (1) -> ride_participants (2) FOR UPDATE
+        Note over DB: Sets status='declined', dispatches notification to Rider
+    end
     Host->>Host: Books Uber/Ola/Rapido
     Host->>Rider: Meet at Community Taxi Pickup Point
     Rider->>Host: Splits fare via UPI after trip
@@ -195,11 +203,13 @@ Students receive real-time and persistent in-app notifications managed under str
 3. **Ride Events:**
    - *Seat Requested:* Sent to Host: `"[Rider Name] requested 1 seat for [Destination]."`
    - *Seat Accepted:* Sent to Rider: `"Your seat request for [Destination] was accepted by [Host Name]. You can now coordinate in ride chat."`
-   - *Seat Declined / Cancelled:* Immediate status update dispatched to affected parties.
+   - *Seat Declined:* Sent to Rider: `"Your seat request for [Destination] was not accepted by the host."`
+   - *Seat Cancelled:* Status update dispatched to affected parties.
 4. **Notification Integrity Rules:**
    - Notifications are created exclusively by trusted database functions running with `SECURITY DEFINER`.
-   - Students can only mark their own notifications as read (`is_read = true`).
-   - Direct mutations of notification title, body, recipient, or link URL are blocked at the database engine level.
+   - Direct client insertion into `notifications` is revoked.
+   - Students can only mark their own notifications as read (`mark_notification_as_read` RPC).
+   - Direct mutations of notification title, body, recipient, or link URL are revoked at the PostgreSQL column privilege layer.
 
 ---
 
