@@ -23,8 +23,10 @@ import {
   RotateCcw,
   Sparkles,
   AlertCircle,
+  Layers,
 } from 'lucide-react';
 import { calculateDistanceMeters } from '@/utils/geo';
+import { env } from '@/utils/env';
 
 // Fix Leaflet's default icon URLs for Vite bundling
 delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
@@ -48,6 +50,15 @@ export interface NearbyCommunityInfo {
   longitude: number | null;
 }
 
+export interface PlaceResultItem {
+  placeId?: string;
+  name: string;
+  secondary?: string;
+  lat?: number;
+  lng?: number;
+  formattedAddress?: string;
+}
+
 interface MapAddressPickerProps {
   value?: SelectedLocation | null;
   onChange: (location: SelectedLocation) => void;
@@ -59,24 +70,40 @@ interface MapAddressPickerProps {
 const DEFAULT_CENTER: [number, number] = [23.1557, 72.6669];
 export const COMMUNITY_PROXIMITY_RADIUS_METERS = 15;
 
+// Popular student campus hubs for instant 1-tap navigation
+const CAMPUS_SHORTCUTS = [
+  { label: 'Hiramani / Nirma (SG Hwy)', coords: [23.1294, 72.5385] as [number, number] },
+  { label: 'PDEU / Raysan', coords: [23.1557, 72.6669] as [number, number] },
+  { label: 'Infocity / Gandhinagar', coords: [23.1952, 72.6289] as [number, number] },
+  { label: 'Vaishnodevi Circle', coords: [23.134, 72.545] as [number, number] },
+  { label: 'GIFT City', coords: [23.1593, 72.6842] as [number, number] },
+];
+
+type MapStyle = 'streets' | 'satellite';
+
 /**
- * Dedicated Map Canvas rendered strictly when Dialog is mounted.
- * Solves Radix UI Portal delay and guarantees non-zero DOM size.
+ * Dedicated Google Maps Tile Canvas rendered strictly when Dialog is mounted.
+ * Uses Google Street & Satellite layers for authentic landmarks across India.
  */
-interface LeafletMapCanvasProps {
+interface GoogleMapCanvasProps {
   center: [number, number];
   onPositionChange: (lat: number, lng: number) => void;
   existingCommunities: NearbyCommunityInfo[];
+  mapStyle: MapStyle;
+  onToggleStyle: () => void;
 }
 
-const LeafletMapCanvas: React.FC<LeafletMapCanvasProps> = ({
+const GoogleMapCanvas: React.FC<GoogleMapCanvasProps> = ({
   center,
   onPositionChange,
   existingCommunities,
+  mapStyle,
+  onToggleStyle,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
 
   // Initialize map when DOM element mounts
   useEffect(() => {
@@ -94,16 +121,19 @@ const LeafletMapCanvas: React.FC<LeafletMapCanvasProps> = ({
       fadeAnimation: true,
     });
 
-    // Carto Voyager high-speed CDN tiles (clean campus & street display)
-    L.tileLayer(
-      'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-      {
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 20,
-      }
-    ).addTo(map);
+    // Google Maps Tile Layer: 'lyrs=m' is Standard Roadmap, 'lyrs=y' is Hybrid Satellite with labels
+    const tileUrl =
+      mapStyle === 'satellite'
+        ? 'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+        : 'https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}';
+
+    const tiles = L.tileLayer(tileUrl, {
+      attribution: '&copy; Google Maps',
+      subdomains: ['0', '1', '2', '3'],
+      maxZoom: 21,
+    }).addTo(map);
+
+    tileLayerRef.current = tiles;
 
     const marker = L.marker(center, { draggable: true }).addTo(map);
 
@@ -124,7 +154,7 @@ const LeafletMapCanvas: React.FC<LeafletMapCanvasProps> = ({
           radius: COMMUNITY_PROXIMITY_RADIUS_METERS,
           color: '#f59e0b',
           fillColor: '#f59e0b',
-          fillOpacity: 0.2,
+          fillOpacity: 0.25,
           weight: 2,
           dashArray: '4, 4',
         })
@@ -158,10 +188,29 @@ const LeafletMapCanvas: React.FC<LeafletMapCanvasProps> = ({
       map.remove();
       mapRef.current = null;
       markerRef.current = null;
+      tileLayerRef.current = null;
     };
   }, []); // Run once on mount
 
-  // Smoothly pan when center changes from search or locate me
+  // Switch between Street and Satellite layers dynamically
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (tileLayerRef.current) {
+      mapRef.current.removeLayer(tileLayerRef.current);
+    }
+    const tileUrl =
+      mapStyle === 'satellite'
+        ? 'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+        : 'https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}';
+
+    tileLayerRef.current = L.tileLayer(tileUrl, {
+      attribution: '&copy; Google Maps',
+      subdomains: ['0', '1', '2', '3'],
+      maxZoom: 21,
+    }).addTo(mapRef.current);
+  }, [mapStyle]);
+
+  // Smoothly pan when center changes from search or preset chips
   useEffect(() => {
     if (mapRef.current && markerRef.current) {
       markerRef.current.setLatLng(center);
@@ -170,16 +219,28 @@ const LeafletMapCanvas: React.FC<LeafletMapCanvasProps> = ({
   }, [center]);
 
   return (
-    <div className="relative w-full h-[360px] sm:h-[420px] bg-muted/30">
+    <div className="relative w-full h-[380px] sm:h-[430px] bg-muted/30">
       <div
         ref={containerRef}
-        style={{ width: '100%', height: '100%', minHeight: '360px' }}
+        style={{ width: '100%', height: '100%', minHeight: '380px' }}
         className="w-full h-full"
       />
-      <div className="absolute top-3 left-3 z-[500] bg-background/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-border/80 shadow-card text-[11px] font-medium text-muted-foreground flex items-center gap-1.5 pointer-events-none">
+
+      {/* Top Left Instruction Badge */}
+      <div className="absolute top-3 left-3 z-[500] bg-background/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-border/80 shadow-card text-[11px] font-medium text-foreground flex items-center gap-1.5 pointer-events-none">
         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-        <span>Tap or drag pin to set exact address</span>
+        <span>Tap or drag pin to your hostel/PG</span>
       </div>
+
+      {/* Top Right Map Style Switcher (Street / Satellite) */}
+      <button
+        type="button"
+        onClick={onToggleStyle}
+        className="absolute top-3 right-3 z-[500] bg-background/95 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-border/80 shadow-card text-xs font-semibold text-foreground flex items-center gap-1.5 hover:bg-muted active:scale-95 transition-all"
+      >
+        <Layers className="w-3.5 h-3.5 text-primary" />
+        <span>{mapStyle === 'streets' ? 'Satellite View' : 'Google Street View'}</span>
+      </button>
     </div>
   );
 };
@@ -191,6 +252,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   existingCommunities = [],
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [mapStyle, setMapStyle] = useState<MapStyle>('streets');
   const [currentCoords, setCurrentCoords] = useState<[number, number]>(
     value ? [value.lat, value.lng] : DEFAULT_CENTER
   );
@@ -199,9 +261,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<
-    Array<{ display_name: string; lat: string; lon: string }>
-  >([]);
+  const [searchResults, setSearchResults] = useState<PlaceResultItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
   // Check 15m radius proximity to existing communities
@@ -282,20 +342,79 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
     }
   };
 
-  // Search places using Nominatim
+  // Robust Search with Google Places Autocomplete & Fallback
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchQuery.trim()) return;
+    const query = searchQuery.trim();
+    if (!query) return;
 
     setIsSearching(true);
     try {
+      const apiKey = env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyBYXB4AsyTqTUchbfMeUFMNBOd0qJtv2f0';
+
+      // 1. Google Places API (New) Autocomplete
+      if (apiKey) {
+        try {
+          const googleResp = await fetch(
+            'https://places.googleapis.com/v1/places:autocomplete',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Goog-Api-Key': apiKey,
+              },
+              body: JSON.stringify({
+                input: query,
+                includedRegionCodes: ['in'],
+              }),
+            }
+          );
+          if (googleResp.ok) {
+            const googleData = await googleResp.json();
+            if (googleData.suggestions && googleData.suggestions.length > 0) {
+              const items: PlaceResultItem[] = googleData.suggestions
+                .map((s: { placePrediction?: { placeId?: string; structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } }; text?: { text?: string } } }) => s.placePrediction)
+                .filter(Boolean)
+                .map((p: { placeId?: string; structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } }; text?: { text?: string } }) => ({
+                  placeId: p.placeId,
+                  name: p.structuredFormat?.mainText?.text || p.text?.text || '',
+                  secondary: p.structuredFormat?.secondaryText?.text || '',
+                  formattedAddress: p.text?.text || '',
+                }));
+              setSearchResults(items);
+              setIsSearching(false);
+              return;
+            }
+          }
+        } catch (err) {
+          console.warn('Google Places API search failed, falling back to OSM:', err);
+        }
+      }
+
+      // 2. OpenStreetMap Search Fallback
       const response = await fetch(
         `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-          searchQuery
-        )}&countrycodes=in&limit=4`
+          query
+        )}&countrycodes=in&limit=5`
       );
       const data = await response.json();
-      setSearchResults(data);
+
+      if (data && data.length > 0) {
+        setSearchResults(
+          data.map((item: { display_name: string; lat: string; lon: string }) => ({
+            name: item.display_name.split(',')[0],
+            secondary: item.display_name.split(',').slice(1).join(',').trim(),
+            lat: parseFloat(item.lat),
+            lng: parseFloat(item.lon),
+            formattedAddress: item.display_name,
+          }))
+        );
+        setIsSearching(false);
+        return;
+      }
+
+      setSearchResults([]);
+      alert(`Could not locate "${query}". Try tapping one of the campus chips below!`);
     } catch {
       setSearchResults([]);
     } finally {
@@ -303,12 +422,39 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
     }
   };
 
-  const handleSelectSearchResult = (result: { lat: string; lon: string; display_name: string }) => {
-    const lat = parseFloat(result.lat);
-    const lng = parseFloat(result.lon);
+  const handleSelectSearchResult = async (item: PlaceResultItem) => {
     setSearchResults([]);
-    setSearchQuery('');
-    handlePositionChange(lat, lng);
+    setSearchQuery(item.name);
+
+    if (item.lat && item.lng) {
+      handlePositionChange(item.lat, item.lng);
+      if (item.formattedAddress) {
+        setResolvedAddress(item.formattedAddress);
+      }
+      return;
+    }
+
+    if (item.placeId) {
+      const apiKey = env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyBYXB4AsyTqTUchbfMeUFMNBOd0qJtv2f0';
+      try {
+        const detailsResp = await fetch(
+          `https://places.googleapis.com/v1/places/${item.placeId}?fields=id,displayName,formattedAddress,location&key=${apiKey}`
+        );
+        if (detailsResp.ok) {
+          const details = await detailsResp.json();
+          const lat = details.location?.latitude;
+          const lng = details.location?.longitude;
+          const addr = details.formattedAddress || item.name;
+          if (lat && lng) {
+            handlePositionChange(lat, lng);
+            setResolvedAddress(addr);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch Google Place details:', err);
+      }
+    }
   };
 
   // GPS Locate me
@@ -327,7 +473,9 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
       },
       () => {
         setIsLocating(false);
-        alert('Could not access current location. Please allow location permissions or search your area.');
+        alert(
+          'Could not access current location. Please allow location permissions or tap a campus chip.'
+        );
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
@@ -337,7 +485,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   const handleConfirm = () => {
     onChange({
       address:
-        resolvedAddress ||
+        resolvedAddress.trim() ||
         `Pinned Location (${currentCoords[0].toFixed(5)}, ${currentCoords[1].toFixed(5)})`,
       city: resolvedCity || 'Gandhinagar',
       lat: currentCoords[0],
@@ -360,7 +508,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold text-foreground">Verified Map Pin</span>
                   <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                    <CheckCircle2 className="w-3 h-3" /> Selected on Map
+                    <CheckCircle2 className="w-3 h-3" /> Selected on Google Maps
                   </span>
                 </div>
                 <p className="text-sm font-semibold text-foreground leading-snug">
@@ -401,12 +549,11 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
           </div>
           <div className="space-y-1">
             <h4 className="text-sm font-bold text-foreground flex items-center justify-center gap-1.5">
-              <span>Select Residence on Map</span>
+              <span>Select Residence on Google Maps</span>
               <Sparkles className="w-3.5 h-3.5 text-primary" />
             </h4>
             <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-              Tap to open the interactive map. Pinpoint your hostel, PG, or society to automatically
-              capture the exact verified location.
+              Tap to open the map with street and satellite views. Drop your pin at your exact hostel or PG building.
             </p>
           </div>
           <div>
@@ -435,7 +582,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
 
       {/* Map Picker Modal Dialog */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="sm:max-w-2xl p-0 overflow-hidden gap-0 max-h-[92vh] flex flex-col">
+        <DialogContent className="sm:max-w-2xl p-0 overflow-hidden gap-0 max-h-[94vh] flex flex-col">
           <DialogHeader className="p-4 pb-3 border-b border-border/60">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
@@ -443,11 +590,10 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
               </div>
               <div>
                 <DialogTitle className="text-base font-bold">
-                  Pinpoint Residence Location
+                  Pinpoint Residence on Google Maps
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground">
-                  Drag the pin or tap anywhere on the map to set your community&apos;s physical
-                  address.
+                  Drag the pin onto your hostel or society gate. Switch to Satellite view to see building roofs.
                 </DialogDescription>
               </div>
             </div>
@@ -458,7 +604,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
                   type="text"
-                  placeholder="Search hostel, college, road, or area..."
+                  placeholder="Search landmark, road, or area..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="pl-9 text-xs h-9"
@@ -494,6 +640,23 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
               </Button>
             </div>
 
+            {/* 1-Tap Campus Shortcuts */}
+            <div className="pt-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+              <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider shrink-0 mr-1">
+                Quick Jump:
+              </span>
+              {CAMPUS_SHORTCUTS.map((shortcut, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => handlePositionChange(shortcut.coords[0], shortcut.coords[1])}
+                  className="shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-muted hover:bg-primary/10 hover:text-primary border border-border/80 transition-all active:scale-95"
+                >
+                  📍 {shortcut.label}
+                </button>
+              ))}
+            </div>
+
             {/* Search Suggestions Dropdown */}
             {searchResults.length > 0 && (
               <div className="mt-2 p-1.5 rounded-xl bg-card border border-border shadow-elevated space-y-1">
@@ -502,10 +665,19 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
                     key={idx}
                     type="button"
                     onClick={() => handleSelectSearchResult(res)}
-                    className="w-full text-left p-2 rounded-lg hover:bg-muted text-xs text-foreground truncate flex items-center gap-2 transition-colors"
+                    className="w-full text-left p-2.5 rounded-xl hover:bg-muted text-xs text-foreground flex items-start gap-2.5 transition-colors border border-transparent hover:border-border"
                   >
-                    <MapPin className="w-3.5 h-3.5 text-primary shrink-0" />
-                    <span className="truncate">{res.display_name}</span>
+                    <MapPin className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-semibold text-foreground block truncate">
+                        {res.name}
+                      </span>
+                      {res.secondary && (
+                        <span className="text-[11px] text-muted-foreground block truncate">
+                          {res.secondary}
+                        </span>
+                      )}
+                    </div>
                   </button>
                 ))}
               </div>
@@ -514,32 +686,37 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
 
           {/* Leaflet Map Canvas Component mounted only when Dialog is open */}
           {isOpen && (
-            <LeafletMapCanvas
+            <GoogleMapCanvas
               center={currentCoords}
               onPositionChange={handlePositionChange}
               existingCommunities={existingCommunities}
+              mapStyle={mapStyle}
+              onToggleStyle={() =>
+                setMapStyle((prev) => (prev === 'streets' ? 'satellite' : 'streets'))
+              }
             />
           )}
 
-          {/* Location Summary & Confirm Footer */}
+          {/* Location Summary & Confirm Footer with Editable Address Input */}
           <div className="p-4 border-t border-border/60 bg-card space-y-3">
-            <div className="p-3 rounded-xl bg-muted/50 border border-border/50 text-xs flex items-start gap-2.5">
-              <MapPin className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
-                  Detected Address
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">
+                  Physical Address (Auto-detected or fine-tune manually)
                 </span>
-                {isGeocoding ? (
-                  <div className="flex items-center gap-2 text-muted-foreground py-0.5">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    <span>Detecting exact address from map pin...</span>
-                  </div>
-                ) : (
-                  <p className="font-semibold text-foreground truncate">
-                    {resolvedAddress || 'Address will appear when you tap the map'}
-                  </p>
+                {isGeocoding && (
+                  <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <Loader2 className="w-2.5 h-2.5 animate-spin" /> Detecting address...
+                  </span>
                 )}
               </div>
+              <Input
+                type="text"
+                value={resolvedAddress}
+                onChange={(e) => setResolvedAddress(e.target.value)}
+                placeholder="Address will populate when you tap the map, or type here"
+                className="text-xs h-9 font-medium"
+              />
             </div>
 
             {/* Proximity notice if within 15m */}
@@ -571,7 +748,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
                 type="button"
                 size="sm"
                 onClick={handleConfirm}
-                disabled={isGeocoding || !resolvedAddress}
+                disabled={!resolvedAddress.trim()}
                 className="font-semibold gap-1.5"
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />

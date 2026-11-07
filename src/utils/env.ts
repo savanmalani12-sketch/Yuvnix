@@ -9,6 +9,7 @@ const envSchema = z.object({
     .min(1, 'VITE_SUPABASE_ANON_KEY is required and cannot be empty'),
   VITE_APP_URL: z.string().url().optional(),
   VITE_APP_ENV: z.enum(['development', 'staging', 'production']).default('development'),
+  VITE_GOOGLE_MAPS_API_KEY: z.string().optional(),
 });
 
 export type ClientEnv = z.infer<typeof envSchema>;
@@ -24,6 +25,7 @@ function getClientEnv(): ClientEnv {
     VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key',
     VITE_APP_URL: import.meta.env.VITE_APP_URL,
     VITE_APP_ENV: import.meta.env.VITE_APP_ENV || 'development',
+    VITE_GOOGLE_MAPS_API_KEY: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyBYXB4AsyTqTUchbfMeUFMNBOd0qJtv2f0',
   };
 
   const parsed = envSchema.safeParse(rawEnv);
