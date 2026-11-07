@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,7 @@ import {
 
 export const CommunitiesPage: React.FC = () => {
   const [search, setSearch] = useState('');
+  const navigate = useNavigate();
   const { user, isAuthenticated, signInWithGoogle } = useAuth();
   const queryClient = useQueryClient();
 
@@ -288,7 +289,7 @@ export const CommunitiesPage: React.FC = () => {
               : 'No residential communities have been registered yet. Be the first to propose your hostel or PG!'
           }
           actionLabel="Request Your Community"
-          onAction={() => {}}
+          onAction={() => navigate('/communities/request')}
         />
       )}
     </PageContainer>
