@@ -1,7 +1,7 @@
 # Yuvnix — Complete SQL Audit Bundle
 
 **Audit Target:** Architecture v3.2 / SQL Test Harness v1.3 Working-Tree Specification  
-**Base Git Commit:** `156ee1494bd3e0be7be7bc536cf50b2eaa48d11a`  
+**Base Git Commit:** `872f3419745e0e15e597ae290b1156f17e0a4a12`  
 **Working Tree Status:** Working tree modified (audit remediation applied to schema and test harness files)  
 **Database Target:** PostgreSQL 17.11 (Supabase Local Disposable Environment)  
 **Audit Scope:** 6 Standalone PostgreSQL 17.11 SQL Source Files  
@@ -12,7 +12,7 @@
 
 | # | File Path | Lines | Bytes | SHA-256 | Description |
 |---|-----------|-------|-------|---------|-------------|
-| 1 | `supabase/schema.sql` | 1389 | 53,785 | `ece9067b5ff3bc5c116f10a6f07a4b54ed8e95836ae55caf74265102ddd9509e` | Complete PostgreSQL 17.11 schema DDL, RLS policies, triggers, RPCs, privileges |
+| 1 | `supabase/schema.sql` | 1391 | 53,911 | `63dd740164ec1031f5a4a881a1953bd72faa8c88ba1ab5750d079108c37db278` | Complete PostgreSQL 17.11 schema DDL, RLS policies, triggers, RPCs, privileges |
 | 2 | `supabase/tests/fixtures.sql` | 243 | 15,509 | `ae4e19df126e233078e69b60375efc21e4c4ded31c2fc28394335b963ce6dccc` | Disposable test fixtures provisioning auth.users, profiles, rides, carts |
 | 3 | `supabase/tests/cleanup.sql` | 62 | 2,476 | `efd8286853e4d0356f51c16d446a5aa3a52b6b0f0b41c37bcf363ec22b3adb2e` | Idempotent teardown script cascading via auth.users and dedicated test UUIDs |
 | 4 | `supabase/tests/security_tests.sql` | 1011 | 41,956 | `ee944e94c5dfff35a61fb7bcf67f91795d6120bcb993ff2e9bc2299a8852fc8d` | 19 automated security unit tests validating RLS, grants, and auth context |
@@ -24,9 +24,9 @@
 ## File 1 of 6: `supabase/schema.sql`
 
 > **File:** `supabase/schema.sql`  
-> **Lines:** 1389  
-> **Bytes:** 53785  
-> **SHA-256:** `ece9067b5ff3bc5c116f10a6f07a4b54ed8e95836ae55caf74265102ddd9509e`  
+> **Lines:** 1391  
+> **Bytes:** 53911  
+> **SHA-256:** `63dd740164ec1031f5a4a881a1953bd72faa8c88ba1ab5750d079108c37db278`  
 > **Encoding:** UTF-8  
 
 ```sql
@@ -959,10 +959,10 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
 
 -- =============================================================================
--- 2. FUNCTION EXECUTION GRANTS (AUTHENTICATED ONLY)
+-- 2. FUNCTION EXECUTION GRANTS
 -- =============================================================================
-GRANT EXECUTE ON FUNCTION public.is_staff_or_admin() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.is_community_member(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_staff_or_admin() TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.is_community_member(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.set_cart_item_fulfillment(UUID, BOOLEAN) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.request_ride_seats(UUID, INT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.accept_ride_participant(UUID, UUID) TO authenticated;
@@ -983,10 +983,12 @@ GRANT UPDATE (full_name, avatar_url) ON public.profiles TO authenticated;
 GRANT SELECT ON public.profile_private TO authenticated;
 GRANT UPDATE (phone_number) ON public.profile_private TO authenticated;
 
--- communities: Public discovery SELECT; mutations controlled strictly via staff RLS
+-- communities: Public discovery SELECT (anon & authenticated); mutations controlled strictly via staff RLS
+GRANT SELECT ON public.communities TO anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.communities TO authenticated;
 
 -- community_pickup_points: Member-only SELECT; mutations controlled strictly via staff RLS
+GRANT SELECT ON public.community_pickup_points TO anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.community_pickup_points TO authenticated;
 
 -- community_memberships: Students can request join (is_active=false) / leave; staff can activate
@@ -1079,7 +1081,7 @@ CREATE POLICY "profile_private_update_self"
 -- =============================================================================
 CREATE POLICY "communities_select_verified"
     ON public.communities FOR SELECT
-    TO authenticated
+    TO anon, authenticated
     USING (is_verified = true OR public.is_staff_or_admin());
 
 CREATE POLICY "communities_staff_all"
@@ -1093,7 +1095,7 @@ CREATE POLICY "communities_staff_all"
 -- =============================================================================
 CREATE POLICY "pickup_points_select_members_only"
     ON public.community_pickup_points FOR SELECT
-    TO authenticated
+    TO anon, authenticated
     USING (
         public.is_community_member(community_id) OR
         public.is_staff_or_admin()

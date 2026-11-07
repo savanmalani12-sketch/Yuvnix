@@ -1,0 +1,10 @@
+# Netlify Build and Single-Page App (SPA) Redirect Configuration
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Redirect all client routes (e.g. /communities, /carts, /rides, /profile) to index.html for React Router
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

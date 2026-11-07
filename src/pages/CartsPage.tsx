@@ -1,53 +1,62 @@
 import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { StatusBadge } from '@/components/common/StatusBadge';
+import { EmptyState } from '@/components/common/EmptyState';
+import { supabase } from '@/services/supabase';
+import { formatDateTime } from '@/utils/formatters';
+import { useAuth } from '@/hooks/useAuth';
 import {
   PlusCircle,
   Clock,
   MessageSquare,
   Store,
   Info,
+  Loader2,
+  ShoppingCart,
+  LogIn,
 } from 'lucide-react';
-import type { GroupCart } from '@/types';
-
-// Foundation mockup demonstrating data structure and peer-to-peer model
-const SAMPLE_CARTS: (GroupCart & { community_name: string; items_count: number })[] = [
-  {
-    id: 'cart-1',
-    community_id: 'c1',
-    community_name: 'PDEU Hostel',
-    created_by_user_id: 'u1',
-    title: 'Midnight Snacks & Energy Drinks',
-    store_name: 'Zepto',
-    status: 'open',
-    lock_at: new Date(Date.now() + 3600 * 1000 * 2).toISOString(),
-    pickup_instructions: 'Will collect at Hostel Gate 1 security desk and ping in group chat',
-    total_estimated_amount: 480,
-    items_count: 5,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'cart-2',
-    community_id: 'c2',
-    community_name: 'PDEU Girls Hostel',
-    created_by_user_id: 'u2',
-    title: 'Sunday Morning Fruits & Milk',
-    store_name: 'Blinkit',
-    status: 'locked',
-    lock_at: new Date(Date.now() - 3600 * 1000).toISOString(),
-    pickup_instructions: 'Order placed, arriving at Block G Foyer in 15 mins',
-    total_estimated_amount: 820,
-    items_count: 9,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-];
 
 export const CartsPage: React.FC = () => {
+  const { isAuthenticated, signInWithGoogle } = useAuth();
+
+  const {
+    data: carts = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['group_carts'],
+    enabled: isAuthenticated,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('group_carts')
+        .select(`
+          id,
+          community_id,
+          created_by_user_id,
+          title,
+          store_name,
+          status,
+          lock_at,
+          pickup_instructions,
+          total_estimated_amount,
+          created_at,
+          updated_at,
+          community:communities(name),
+          cart_items(id, is_fulfilled)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        throw error;
+      }
+      return data;
+    },
+  });
+
   return (
     <PageContainer
       title="Group Grocery Orders"
@@ -67,56 +76,123 @@ export const CartsPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {SAMPLE_CARTS.map((cart) => (
-          <Card key={cart.id} className="hover:border-primary/40 transition-all flex flex-col justify-between">
-            <CardHeader className="space-y-3 pb-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <Badge variant="outline" className="mb-1.5 text-[11px]">
-                    {cart.community_name}
-                  </Badge>
-                  <CardTitle className="text-lg font-bold">{cart.title}</CardTitle>
-                </div>
-                <StatusBadge status={cart.status} />
-              </div>
+      {/* Sign In Required State */}
+      {!isAuthenticated && (
+        <Card className="p-8 text-center border-dashed">
+          <div className="max-w-md mx-auto space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto">
+              <ShoppingCart className="w-6 h-6" />
+            </div>
+            <h3 className="text-lg font-bold">Sign In to View Group Carts</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Group grocery carts are pooled by verified residents in your hostel or PG. Sign in with your student account to join active orders and save on delivery fees.
+            </p>
+            <Button onClick={() => signInWithGoogle()} className="font-semibold gap-2 mt-2">
+              <LogIn className="w-4 h-4" />
+              <span>Sign In with Google</span>
+            </Button>
+          </div>
+        </Card>
+      )}
 
-              {cart.store_name && (
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Store className="w-3.5 h-3.5 text-primary" />
-                  <span>Store: <strong>{cart.store_name}</strong></span>
-                </div>
-              )}
+      {/* Loading State */}
+      {isAuthenticated && isLoading && (
+        <div className="py-16 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          <p className="text-sm">Loading active grocery carts...</p>
+        </div>
+      )}
 
-              <CardDescription className="text-xs">
-                {cart.pickup_instructions}
-              </CardDescription>
-            </CardHeader>
+      {/* Error State */}
+      {isAuthenticated && error && !isLoading && (
+        <div className="p-4 mb-6 rounded-2xl bg-destructive/10 border border-destructive/20 text-destructive text-sm">
+          Failed to load group carts: {(error as Error).message}
+        </div>
+      )}
 
-            <CardContent className="space-y-3 pt-0">
-              <div className="flex items-center justify-between text-xs py-2 px-3 rounded-xl bg-muted/50 border border-border/50">
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <Clock className="w-3.5 h-3.5 text-amber-600" />
-                  Locking soon
-                </span>
-                <span className="font-semibold text-foreground">
-                  {cart.items_count} items pooled
-                </span>
-              </div>
+      {/* Grid of Group Carts */}
+      {isAuthenticated && !isLoading && !error && carts.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {carts.map((cart) => {
+            const communityName =
+              cart.community && typeof cart.community === 'object' && 'name' in cart.community
+                ? (cart.community as { name: string }).name
+                : 'Community';
+            const itemsCount = cart.cart_items?.length || 0;
+            const isLockImminent =
+              new Date(cart.lock_at).getTime() - Date.now() < 3600 * 1000 &&
+              new Date(cart.lock_at).getTime() > Date.now();
 
-              <div className="flex items-center justify-between pt-1">
-                <Button variant="outline" size="sm" className="gap-1.5 text-xs">
-                  <MessageSquare className="w-3.5 h-3.5" />
-                  <span>Group Chat</span>
-                </Button>
-                <Button size="sm" variant="default" className="text-xs">
-                  View Items
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            return (
+              <Card key={cart.id} className="hover:border-primary/40 transition-all flex flex-col justify-between">
+                <CardHeader className="space-y-3 pb-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <Badge variant="outline" className="mb-1.5 text-[11px]">
+                        {communityName}
+                      </Badge>
+                      <CardTitle className="text-lg font-bold">{cart.title}</CardTitle>
+                    </div>
+                    <StatusBadge status={cart.status} />
+                  </div>
+
+                  {cart.store_name && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Store className="w-3.5 h-3.5 text-primary" />
+                      <span>
+                        Store: <strong>{cart.store_name}</strong>
+                      </span>
+                    </div>
+                  )}
+
+                  {cart.pickup_instructions && (
+                    <CardDescription className="text-xs">
+                      {cart.pickup_instructions}
+                    </CardDescription>
+                  )}
+                </CardHeader>
+
+                <CardContent className="space-y-3 pt-0">
+                  <div className="flex items-center justify-between text-xs py-2 px-3 rounded-xl bg-muted/50 border border-border/50">
+                    <span className="flex items-center gap-1 text-muted-foreground">
+                      <Clock
+                        className={`w-3.5 h-3.5 ${
+                          isLockImminent ? 'text-amber-600 animate-pulse' : 'text-muted-foreground'
+                        }`}
+                      />
+                      <span>Lock: {formatDateTime(cart.lock_at)}</span>
+                    </span>
+                    <span className="font-semibold text-foreground">
+                      {itemsCount} {itemsCount === 1 ? 'item' : 'items'} pooled
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <Button variant="outline" size="sm" className="gap-1.5 text-xs">
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>Group Chat</span>
+                    </Button>
+                    <Button size="sm" variant="default" className="text-xs">
+                      View Items
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Empty State */}
+      {isAuthenticated && !isLoading && !error && carts.length === 0 && (
+        <EmptyState
+          icon={<ShoppingCart className="w-6 h-6" />}
+          title="No active grocery carts"
+          description="There are currently no open grocery carts in your residential communities. Start a cart to order together with your neighbors!"
+          actionLabel="Start Group Cart"
+          onAction={() => {}}
+        />
+      )}
     </PageContainer>
   );
 };

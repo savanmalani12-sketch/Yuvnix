@@ -927,10 +927,10 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
 
 -- =============================================================================
--- 2. FUNCTION EXECUTION GRANTS (AUTHENTICATED ONLY)
+-- 2. FUNCTION EXECUTION GRANTS
 -- =============================================================================
-GRANT EXECUTE ON FUNCTION public.is_staff_or_admin() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.is_community_member(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_staff_or_admin() TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.is_community_member(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.set_cart_item_fulfillment(UUID, BOOLEAN) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.request_ride_seats(UUID, INT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.accept_ride_participant(UUID, UUID) TO authenticated;
@@ -951,10 +951,12 @@ GRANT UPDATE (full_name, avatar_url) ON public.profiles TO authenticated;
 GRANT SELECT ON public.profile_private TO authenticated;
 GRANT UPDATE (phone_number) ON public.profile_private TO authenticated;
 
--- communities: Public discovery SELECT; mutations controlled strictly via staff RLS
+-- communities: Public discovery SELECT (anon & authenticated); mutations controlled strictly via staff RLS
+GRANT SELECT ON public.communities TO anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.communities TO authenticated;
 
 -- community_pickup_points: Member-only SELECT; mutations controlled strictly via staff RLS
+GRANT SELECT ON public.community_pickup_points TO anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.community_pickup_points TO authenticated;
 
 -- community_memberships: Students can request join (is_active=false) / leave; staff can activate
@@ -1047,7 +1049,7 @@ CREATE POLICY "profile_private_update_self"
 -- =============================================================================
 CREATE POLICY "communities_select_verified"
     ON public.communities FOR SELECT
-    TO authenticated
+    TO anon, authenticated
     USING (is_verified = true OR public.is_staff_or_admin());
 
 CREATE POLICY "communities_staff_all"
@@ -1061,7 +1063,7 @@ CREATE POLICY "communities_staff_all"
 -- =============================================================================
 CREATE POLICY "pickup_points_select_members_only"
     ON public.community_pickup_points FOR SELECT
-    TO authenticated
+    TO anon, authenticated
     USING (
         public.is_community_member(community_id) OR
         public.is_staff_or_admin()

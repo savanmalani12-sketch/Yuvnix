@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/common/EmptyState';
+import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@/services/supabase';
 import {
   Building2,
   MapPin,
@@ -15,90 +18,110 @@ import {
   Car,
   ShoppingCart,
   GraduationCap,
+  Loader2,
+  Lock,
+  CheckCircle2,
 } from 'lucide-react';
-import type { Community } from '@/types';
-
-// Foundation showcase communities demonstrating real residential physical locations
-const SAMPLE_COMMUNITIES: Community[] = [
-  {
-    id: 'c1',
-    name: 'PDEU Hostel',
-    slug: 'pdeu-hostel',
-    description: 'On-campus boys hostel blocks with high evening delivery volume.',
-    type: 'hostel',
-    college_affiliation: 'PDEU Gandhinagar',
-    address: 'Knowledge Corridor, Raisan',
-    city: 'Gandhinagar',
-    state: 'Gujarat',
-    delivery_pickup_point: 'Hostel Gate 1 Main Security Desk',
-    taxi_pickup_point: 'Hostel Circle / Gate 1 Porch',
-    is_verified: true,
-    active_member_count: 248,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'c2',
-    name: 'PDEU Girls Hostel',
-    slug: 'pdeu-girls-hostel',
-    description: 'Girls residential wings with strict security pickup protocols.',
-    type: 'hostel',
-    college_affiliation: 'PDEU Gandhinagar',
-    address: 'Girls Wing, Campus Block G',
-    city: 'Gandhinagar',
-    state: 'Gujarat',
-    delivery_pickup_point: 'Block G Entrance Foyer Security Desk',
-    taxi_pickup_point: 'Girls Hostel Perimeter Gate',
-    is_verified: true,
-    active_member_count: 182,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'c3',
-    name: 'Sunrise PG',
-    slug: 'sunrise-pg',
-    description: 'Popular off-campus student PG residence near Raysan crossroads.',
-    type: 'pg',
-    college_affiliation: 'Nearby Universities (PDEU, NIFT)',
-    address: 'Plot 44, Raysan Village Road',
-    city: 'Gandhinagar',
-    state: 'Gujarat',
-    delivery_pickup_point: 'Building Main Reception / Gate',
-    taxi_pickup_point: 'Sunrise PG Front Parking Bay',
-    is_verified: true,
-    active_member_count: 64,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'c4',
-    name: 'Friends Apartment',
-    slug: 'friends-apartment',
-    description: 'Student-shared flat clusters with joint weekend grocery runs.',
-    type: 'apartment',
-    college_affiliation: 'Multi-College Students',
-    address: 'Near Bhaijipura Cross Road, Kudasan',
-    city: 'Gandhinagar',
-    state: 'Gujarat',
-    delivery_pickup_point: 'Tower A Ground Lobby',
-    taxi_pickup_point: 'Society Entrance Gate',
-    is_verified: true,
-    active_member_count: 42,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-];
 
 export const CommunitiesPage: React.FC = () => {
   const [search, setSearch] = useState('');
+  const { user, isAuthenticated, signInWithGoogle } = useAuth();
+  const queryClient = useQueryClient();
 
-  const filteredCommunities = SAMPLE_COMMUNITIES.filter(
-    (c) =>
-      c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.address.toLowerCase().includes(search.toLowerCase()) ||
-      (c.college_affiliation && c.college_affiliation.toLowerCase().includes(search.toLowerCase()))
-  );
+  // Query live verified communities with optional pickup points (governed by RLS)
+  const {
+    data: communities = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['communities'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('communities')
+        .select(`
+          id,
+          name,
+          slug,
+          description,
+          type,
+          college_affiliation,
+          city,
+          state,
+          general_area,
+          is_verified,
+          active_member_count,
+          created_at,
+          updated_at,
+          community_pickup_points (
+            physical_address,
+            delivery_pickup_point,
+            taxi_pickup_point,
+            gate_instructions
+          )
+        `)
+        .eq('is_verified', true)
+        .order('name');
+
+      if (error) {
+        throw error;
+      }
+      return data;
+    },
+  });
+
+  // Query active memberships for the current authenticated user
+  const { data: myMemberships = [] } = useQuery({
+    queryKey: ['my_memberships', user?.id],
+    enabled: Boolean(user?.id),
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const { data, error } = await supabase
+        .from('community_memberships')
+        .select('community_id, is_active')
+        .eq('user_id', user.id)
+        .eq('is_active', true);
+
+      if (error) {
+        throw error;
+      }
+      return data || [];
+    },
+  });
+
+  const memberCommunityIds = new Set(myMemberships.map((m) => m.community_id));
+
+  // Join community mutation
+  const joinMutation = useMutation({
+    mutationFn: async (communityId: string) => {
+      if (!isAuthenticated || !user) {
+        await signInWithGoogle();
+        return;
+      }
+
+      const { error } = await supabase.from('community_memberships').insert({
+        community_id: communityId,
+        user_id: user.id,
+        is_active: true,
+      });
+
+      if (error) {
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['my_memberships'] });
+      queryClient.invalidateQueries({ queryKey: ['communities'] });
+    },
+  });
+
+  const filteredCommunities = communities.filter((c) => {
+    const q = search.toLowerCase();
+    const nameMatch = c.name.toLowerCase().includes(q);
+    const cityMatch = c.city.toLowerCase().includes(q);
+    const areaMatch = Boolean(c.general_area && c.general_area.toLowerCase().includes(q));
+    const collegeMatch = Boolean(c.college_affiliation && c.college_affiliation.toLowerCase().includes(q));
+    return nameMatch || cityMatch || areaMatch || collegeMatch;
+  });
 
   return (
     <PageContainer
@@ -125,78 +148,145 @@ export const CommunitiesPage: React.FC = () => {
         />
       </div>
 
+      {/* Loading state */}
+      {isLoading && (
+        <div className="py-16 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          <p className="text-sm">Loading residential communities...</p>
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && !isLoading && (
+        <div className="p-4 mb-6 rounded-2xl bg-destructive/10 border border-destructive/20 text-destructive text-sm">
+          Failed to load communities: {(error as Error).message}
+        </div>
+      )}
+
       {/* Grid of Communities */}
-      {filteredCommunities.length > 0 ? (
+      {!isLoading && !error && filteredCommunities.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {filteredCommunities.map((community) => (
-            <Card key={community.id} className="hover:border-primary/50 transition-all flex flex-col justify-between">
-              <CardHeader className="space-y-3 pb-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className="p-2 rounded-xl bg-primary/10 text-primary">
-                      <Building2 className="w-5 h-5" />
+          {filteredCommunities.map((community) => {
+            const isMember = memberCommunityIds.has(community.id);
+            // In PostgreSQL 1:1 relation, community_pickup_points may be an array of length 0 or 1
+            const pickupPoint = Array.isArray(community.community_pickup_points)
+              ? community.community_pickup_points[0]
+              : community.community_pickup_points;
+
+            return (
+              <Card key={community.id} className="hover:border-primary/50 transition-all flex flex-col justify-between">
+                <CardHeader className="space-y-3 pb-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                        <Building2 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-lg">{community.name}</CardTitle>
+                        <span className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                          <MapPin className="w-3 h-3" />
+                          {community.general_area
+                            ? `${community.general_area}, ${community.city}`
+                            : `${community.city}, ${community.state || ''}`}
+                        </span>
+                      </div>
                     </div>
-                    <div>
-                      <CardTitle className="text-lg">{community.name}</CardTitle>
-                      <span className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                        <MapPin className="w-3 h-3" />
-                        {community.address}, {community.city}
+                    <Badge variant={community.type === 'hostel' ? 'default' : 'secondary'} className="capitalize">
+                      {community.type}
+                    </Badge>
+                  </div>
+
+                  {community.college_affiliation && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/50 px-2.5 py-1 rounded-lg w-fit">
+                      <GraduationCap className="w-3.5 h-3.5 text-primary" />
+                      <span>Affiliated: {community.college_affiliation}</span>
+                    </div>
+                  )}
+
+                  {community.description && (
+                    <CardDescription className="text-xs line-clamp-2">
+                      {community.description}
+                    </CardDescription>
+                  )}
+                </CardHeader>
+
+                <CardContent className="space-y-3 pt-0">
+                  {/* Verified Pickup Points (Tier 2: Resident-Only Access via RLS) */}
+                  <div className="text-xs space-y-1.5 p-3 rounded-xl bg-muted/40 border border-border/50">
+                    <div className="flex items-start gap-2">
+                      <ShoppingCart className="w-3.5 h-3.5 text-indigo-600 mt-0.5 shrink-0" />
+                      <span className="text-muted-foreground">
+                        <strong className="text-foreground">Delivery Point:</strong>{' '}
+                        {pickupPoint ? (
+                          pickupPoint.delivery_pickup_point
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-muted-foreground italic">
+                            <Lock className="w-3 h-3 text-muted-foreground/70" />
+                            Visible to verified residents
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <Car className="w-3.5 h-3.5 text-violet-600 mt-0.5 shrink-0" />
+                      <span className="text-muted-foreground">
+                        <strong className="text-foreground">Taxi Point:</strong>{' '}
+                        {pickupPoint ? (
+                          pickupPoint.taxi_pickup_point
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-muted-foreground italic">
+                            <Lock className="w-3 h-3 text-muted-foreground/70" />
+                            Visible to verified residents
+                          </span>
+                        )}
                       </span>
                     </div>
                   </div>
-                  <Badge variant={community.type === 'hostel' ? 'default' : 'secondary'} className="capitalize">
-                    {community.type}
-                  </Badge>
-                </div>
 
-                {community.college_affiliation && (
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/50 px-2.5 py-1 rounded-lg w-fit">
-                    <GraduationCap className="w-3.5 h-3.5 text-primary" />
-                    <span>Affiliated: {community.college_affiliation}</span>
-                  </div>
-                )}
-
-                <CardDescription className="text-xs line-clamp-2">
-                  {community.description}
-                </CardDescription>
-              </CardHeader>
-
-              <CardContent className="space-y-3 pt-0">
-                {/* Verified Pickup Points */}
-                <div className="text-xs space-y-1.5 p-3 rounded-xl bg-muted/40 border border-border/50">
-                  <div className="flex items-start gap-2">
-                    <ShoppingCart className="w-3.5 h-3.5 text-indigo-600 mt-0.5 shrink-0" />
-                    <span className="text-muted-foreground">
-                      <strong className="text-foreground">Delivery Point:</strong> {community.delivery_pickup_point}
+                  <div className="flex items-center justify-between pt-2">
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5" />
+                      {community.active_member_count} residents
                     </span>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <Car className="w-3.5 h-3.5 text-violet-600 mt-0.5 shrink-0" />
-                    <span className="text-muted-foreground">
-                      <strong className="text-foreground">Taxi Point:</strong> {community.taxi_pickup_point}
-                    </span>
-                  </div>
-                </div>
 
-                <div className="flex items-center justify-between pt-2">
-                  <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Users className="w-3.5 h-3.5" />
-                    {community.active_member_count} residents
-                  </span>
-
-                  <Button size="sm" variant="subtle" className="text-xs">
-                    Join Residence
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                    {isMember ? (
+                      <Badge variant="outline" className="text-xs gap-1 border-primary/40 text-primary">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Resident Member</span>
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="subtle"
+                        className="text-xs"
+                        disabled={joinMutation.isPending}
+                        onClick={() => joinMutation.mutate(community.id)}
+                      >
+                        {joinMutation.isPending ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          'Join Residence'
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
-      ) : (
+      )}
+
+      {/* Empty State */}
+      {!isLoading && !error && filteredCommunities.length === 0 && (
         <EmptyState
           icon={<Building2 className="w-6 h-6" />}
           title="No residential communities found"
-          description={`We couldn't find any hostel or PG matching "${search}". You can submit a request for your residence!`}
+          description={
+            search
+              ? `We couldn't find any hostel or PG matching "${search}". You can submit a request for your residence!`
+              : 'No residential communities have been registered yet. Be the first to propose your hostel or PG!'
+          }
           actionLabel="Request Your Community"
           onAction={() => {}}
         />
