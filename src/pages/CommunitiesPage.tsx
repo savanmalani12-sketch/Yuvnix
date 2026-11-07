@@ -216,34 +216,39 @@ export const CommunitiesPage: React.FC = () => {
                 <CardContent className="space-y-3 pt-0">
                   {/* Verified Pickup Points (Tier 2: Resident-Only Access via RLS) */}
                   <div className="text-xs space-y-1.5 p-3 rounded-xl bg-muted/40 border border-border/50">
-                    <div className="flex items-start gap-2">
-                      <ShoppingCart className="w-3.5 h-3.5 text-indigo-600 mt-0.5 shrink-0" />
-                      <span className="text-muted-foreground">
-                        <strong className="text-foreground">Delivery Point:</strong>{' '}
-                        {pickupPoint ? (
-                          pickupPoint.delivery_pickup_point
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-muted-foreground italic">
-                            <Lock className="w-3 h-3 text-muted-foreground/70" />
-                            Visible to verified residents
+                    {pickupPoint && pickupPoint.delivery_pickup_point !== pickupPoint.taxi_pickup_point ? (
+                      <>
+                        <div className="flex items-start gap-2">
+                          <ShoppingCart className="w-3.5 h-3.5 text-indigo-600 mt-0.5 shrink-0" />
+                          <span className="text-muted-foreground">
+                            <strong className="text-foreground">Delivery Point:</strong>{' '}
+                            {pickupPoint.delivery_pickup_point}
                           </span>
-                        )}
-                      </span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <Car className="w-3.5 h-3.5 text-violet-600 mt-0.5 shrink-0" />
-                      <span className="text-muted-foreground">
-                        <strong className="text-foreground">Taxi Point:</strong>{' '}
-                        {pickupPoint ? (
-                          pickupPoint.taxi_pickup_point
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-muted-foreground italic">
-                            <Lock className="w-3 h-3 text-muted-foreground/70" />
-                            Visible to verified residents
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <Car className="w-3.5 h-3.5 text-violet-600 mt-0.5 shrink-0" />
+                          <span className="text-muted-foreground">
+                            <strong className="text-foreground">Taxi Point:</strong>{' '}
+                            {pickupPoint.taxi_pickup_point}
                           </span>
-                        )}
-                      </span>
-                    </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex items-start gap-2">
+                        <MapPin className="w-3.5 h-3.5 text-indigo-600 mt-0.5 shrink-0" />
+                        <span className="text-muted-foreground">
+                          <strong className="text-foreground">Delivery &amp; Pickup:</strong>{' '}
+                          {pickupPoint ? (
+                            pickupPoint.delivery_pickup_point
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-muted-foreground italic">
+                              <Lock className="w-3 h-3 text-muted-foreground/70" />
+                              Visible to verified residents
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between pt-2">

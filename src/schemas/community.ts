@@ -26,15 +26,9 @@ export const communityCreationRequestSchema = z.object({
     .string()
     .min(2, 'City is required')
     .max(60, 'City name too long'),
-  // Product rule: Verified shared delivery and taxi pickup points
-  proposed_delivery_pickup_point: z
-    .string()
-    .min(3, 'Delivery pickup point is required (e.g. Main Gate Security, Block B Foyer)')
-    .max(120, 'Pickup point description must be 120 characters or fewer'),
-  proposed_taxi_pickup_point: z
-    .string()
-    .min(3, 'Taxi pickup point is required (e.g. Hostel Gate 1 Circle, PG Main Arch)')
-    .max(120, 'Taxi pickup point description must be 120 characters or fewer'),
+  // Defaults to the selected map location
+  proposed_delivery_pickup_point: z.string().optional(),
+  proposed_taxi_pickup_point: z.string().optional(),
 });
 
 export type CommunityCreationRequestInput = z.infer<typeof communityCreationRequestSchema>;

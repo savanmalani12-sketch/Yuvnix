@@ -23,6 +23,7 @@ import {
   ArrowLeft,
   Loader2,
   Users,
+  MapPin,
 } from 'lucide-react';
 import { MapAddressPicker, type SelectedLocation } from '@/components/common/MapAddressPicker';
 import { calculateDistanceMeters } from '@/utils/geo';
@@ -120,8 +121,8 @@ export const CommunityRequestPage: React.FC = () => {
         proposed_type: data.proposed_type,
         college_affiliation: data.college_affiliation || null,
         proposed_address: data.address,
-        proposed_delivery_pickup_point: data.proposed_delivery_pickup_point,
-        proposed_taxi_pickup_point: data.proposed_taxi_pickup_point,
+        proposed_delivery_pickup_point: data.address,
+        proposed_taxi_pickup_point: data.address,
         latitude: selectedMapLocation?.lat ?? null,
         longitude: selectedMapLocation?.lng ?? null,
         status: 'pending',
@@ -162,7 +163,7 @@ export const CommunityRequestPage: React.FC = () => {
           <CardTitle className="text-2xl font-bold">Request a Residential Community</CardTitle>
           <CardDescription>
             Can&apos;t find your hostel, PG, or student flat? Submit a request.
-            Our support staff verifies physical pickup spots before opening it to residents.
+            Our support staff verifies residence locations before opening them to students.
           </CardDescription>
         </CardHeader>
 
@@ -188,7 +189,7 @@ export const CommunityRequestPage: React.FC = () => {
               <div className="space-y-1.5">
                 <h3 className="text-xl font-bold text-foreground">Request Submitted</h3>
                 <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                  Our support team will review the pickup points and residential details shortly.
+                  Our support team will review the residence details and approve it shortly.
                 </p>
               </div>
               <div className="pt-2 flex justify-center gap-3">
@@ -318,46 +319,13 @@ export const CommunityRequestPage: React.FC = () => {
                     </div>
                   </div>
                 )}
-              </div>
 
-              {/* Delivery Pickup Point */}
-              <div className="space-y-2">
-                <Label htmlFor="proposed_delivery_pickup_point">
-                  Shared Delivery Pickup Point <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="proposed_delivery_pickup_point"
-                  placeholder="e.g. Main Security Desk, Gate 1 Porch, Tower B Foyer"
-                  {...register('proposed_delivery_pickup_point')}
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  Where delivery agents hand over group grocery bags.
-                </p>
-                {errors.proposed_delivery_pickup_point && (
-                  <p className="text-xs text-destructive">
-                    {errors.proposed_delivery_pickup_point.message}
+                <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-primary/5 border border-primary/20 text-xs text-foreground/80">
+                  <MapPin className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <p className="leading-relaxed">
+                    <strong>Default Pickup &amp; Delivery Point:</strong> The residence location selected above on the map will automatically serve as your community&apos;s verified shared delivery and taxi pickup spot.
                   </p>
-                )}
-              </div>
-
-              {/* Taxi Pickup Point */}
-              <div className="space-y-2">
-                <Label htmlFor="proposed_taxi_pickup_point">
-                  Shared Taxi Pickup Point <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="proposed_taxi_pickup_point"
-                  placeholder="e.g. Hostel Circle, Main Gate Arch, Society Gate 2"
-                  {...register('proposed_taxi_pickup_point')}
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  The exact meetup curb for shared taxi arrivals.
-                </p>
-                {errors.proposed_taxi_pickup_point && (
-                  <p className="text-xs text-destructive">
-                    {errors.proposed_taxi_pickup_point.message}
-                  </p>
-                )}
+                </div>
               </div>
 
               <div className="pt-2">
