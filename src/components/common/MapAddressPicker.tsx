@@ -23,6 +23,7 @@ import {
   Sparkles,
   AlertCircle,
 } from 'lucide-react';
+import { calculateDistanceMeters } from '@/utils/geo';
 
 // Fix Leaflet's default icon URLs for Vite bundling
 delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
@@ -39,10 +40,18 @@ export interface SelectedLocation {
   lng: number;
 }
 
+export interface NearbyCommunityInfo {
+  id: string;
+  name: string;
+  latitude: number | null;
+  longitude: number | null;
+}
+
 interface MapAddressPickerProps {
   value?: SelectedLocation | null;
   onChange: (location: SelectedLocation) => void;
   error?: string;
+  existingCommunities?: NearbyCommunityInfo[];
 }
 
 // Default center: Knowledge Corridor / Gandhinagar
@@ -53,6 +62,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   value,
   onChange,
   error,
+  existingCommunities = [],
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [currentCoords, setCurrentCoords] = useState<[number, number]>(
@@ -65,6 +75,27 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Array<{ display_name: string; lat: string; lon: string }>>([]);
   const [isSearching, setIsSearching] = useState(false);
+
+  const nearbyCommunityInMap = React.useMemo(() => {
+    if (!existingCommunities || existingCommunities.length === 0) return null;
+    let closest: { community: NearbyCommunityInfo; distance: number } | null = null;
+    for (const comm of existingCommunities) {
+      if (comm.latitude != null && comm.longitude != null) {
+        const dist = calculateDistanceMeters(
+          currentCoords[0],
+          currentCoords[1],
+          comm.latitude,
+          comm.longitude
+        );
+        if (dist <= 100) {
+          if (!closest || dist < closest.distance) {
+            closest = { community: comm, distance: dist };
+          }
+        }
+      }
+    }
+    return closest;
+  }, [currentCoords, existingCommunities]);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -161,6 +192,32 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
 
       map.on('click', (e) => {
         updatePosition(e.latlng.lat, e.latlng.lng, true);
+      });
+
+      // Render existing communities & their 100m zones
+      existingCommunities.forEach((comm) => {
+        if (comm.latitude != null && comm.longitude != null) {
+          L.circle([comm.latitude, comm.longitude], {
+            radius: 100,
+            color: '#f59e0b',
+            fillColor: '#f59e0b',
+            fillOpacity: 0.12,
+            weight: 1.5,
+            dashArray: '4, 4',
+          })
+            .addTo(map)
+            .bindPopup(`<strong>${comm.name}</strong><br/>100m Radius Zone`);
+
+          L.circleMarker([comm.latitude, comm.longitude], {
+            radius: 6,
+            color: '#f59e0b',
+            fillColor: '#d97706',
+            fillOpacity: 1,
+            weight: 2,
+          })
+            .addTo(map)
+            .bindPopup(`<strong>${comm.name}</strong><br/>Existing Residence`);
+        }
       });
 
       mapInstanceRef.current = map;
@@ -448,6 +505,20 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
                 )}
               </div>
             </div>
+
+            {nearbyCommunityInMap && (
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <span className="font-bold block">
+                    Existing Community Within 100m: &ldquo;{nearbyCommunityInMap.community.name}&rdquo; ({nearbyCommunityInMap.distance}m away)
+                  </span>
+                  <p className="text-[11px] text-muted-foreground leading-normal">
+                    A residence already exists at this location. We recommend joining it to immediately pool groceries and share taxi rides.
+                  </p>
+                </div>
+              </div>
+            )}
 
             <DialogFooter className="flex-row items-center justify-end gap-2 sm:gap-2">
               <Button

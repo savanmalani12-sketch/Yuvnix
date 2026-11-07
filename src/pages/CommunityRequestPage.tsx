@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,8 +22,10 @@ import {
   ShieldCheck,
   ArrowLeft,
   Loader2,
+  Users,
 } from 'lucide-react';
 import { MapAddressPicker, type SelectedLocation } from '@/components/common/MapAddressPicker';
+import { calculateDistanceMeters } from '@/utils/geo';
 
 export const CommunityRequestPage: React.FC = () => {
   const { user, isAuthenticated, signInWithGoogle } = useAuth();
@@ -31,6 +34,44 @@ export const CommunityRequestPage: React.FC = () => {
   const [isSuccess, setIsSuccess] = useState(false);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [selectedMapLocation, setSelectedMapLocation] = useState<SelectedLocation | null>(null);
+
+  // Fetch existing verified communities with coordinates to detect 100m proximity
+  const { data: existingCommunities = [] } = useQuery({
+    queryKey: ['communities_proximity_check'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('communities')
+        .select('id, name, slug, type, latitude, longitude, active_member_count')
+        .eq('is_verified', true);
+      if (error) {
+        console.warn('Could not query communities for proximity check:', error.message);
+        return [];
+      }
+      return data || [];
+    },
+  });
+
+  // Calculate nearest community within 100m radius
+  const nearbyCommunity = useMemo(() => {
+    if (!selectedMapLocation || existingCommunities.length === 0) return null;
+    let closest: { community: typeof existingCommunities[0]; distance: number } | null = null;
+    for (const c of existingCommunities) {
+      if (c.latitude != null && c.longitude != null) {
+        const dist = calculateDistanceMeters(
+          selectedMapLocation.lat,
+          selectedMapLocation.lng,
+          c.latitude,
+          c.longitude
+        );
+        if (dist <= 100) {
+          if (!closest || dist < closest.distance) {
+            closest = { community: c, distance: dist };
+          }
+        }
+      }
+    }
+    return closest;
+  }, [selectedMapLocation, existingCommunities]);
 
   const {
     register,
@@ -81,6 +122,8 @@ export const CommunityRequestPage: React.FC = () => {
         proposed_address: data.address,
         proposed_delivery_pickup_point: data.proposed_delivery_pickup_point,
         proposed_taxi_pickup_point: data.proposed_taxi_pickup_point,
+        latitude: selectedMapLocation?.lat ?? null,
+        longitude: selectedMapLocation?.lng ?? null,
         status: 'pending',
       };
 
@@ -231,7 +274,50 @@ export const CommunityRequestPage: React.FC = () => {
                   value={selectedMapLocation}
                   onChange={handleMapLocationSelect}
                   error={errors.address?.message}
+                  existingCommunities={existingCommunities}
                 />
+
+                {/* 100m Proximity Detection Alert */}
+                {nearbyCommunity && (
+                  <div className="p-4 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 text-amber-950 dark:text-amber-100 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm mt-0.5">
+                        <Building2 className="w-5 h-5" />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400">
+                            Community Found Within 100m
+                          </span>
+                          <span className="text-[10px] font-semibold bg-amber-500/20 px-2 py-0.5 rounded-full">
+                            {nearbyCommunity.distance}m away
+                          </span>
+                        </div>
+                        <h4 className="text-sm font-bold leading-snug">
+                          &ldquo;{nearbyCommunity.community.name}&rdquo; is already active at this location!
+                        </h4>
+                        <p className="text-xs leading-relaxed text-muted-foreground dark:text-amber-200/80">
+                          Instead of creating a duplicate residence, you can join your neighbors right now to share grocery carts and taxi rides without waiting for approval.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1 border-t border-amber-500/20">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="font-semibold gap-1.5 bg-amber-600 hover:bg-amber-700 text-white shadow-sm"
+                        onClick={() => navigate('/communities')}
+                      >
+                        <Users className="w-4 h-4" />
+                        <span>Join &ldquo;{nearbyCommunity.community.name}&rdquo; Instead</span>
+                      </Button>
+                      <span className="text-[11px] text-muted-foreground text-center sm:text-left">
+                        (Or continue submitting below if this is a distinct separate block/wing)
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Delivery Pickup Point */}

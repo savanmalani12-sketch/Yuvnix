@@ -46,6 +46,8 @@ export interface Community {
   address: string;
   city: string;
   state?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   // Rule: Verified shared delivery and taxi pickup point
   delivery_pickup_point: string;
   taxi_pickup_point: string;
@@ -70,6 +72,8 @@ export interface CommunityCreationRequest {
   proposed_type: ResidentialType;
   college_affiliation?: string | null;
   address: string;
+  latitude?: number | null;
+  longitude?: number | null;
   proposed_delivery_pickup_point: string;
   proposed_taxi_pickup_point: string;
   status: CommunityRequestStatus;

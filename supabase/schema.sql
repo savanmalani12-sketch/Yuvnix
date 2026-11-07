@@ -66,6 +66,8 @@ CREATE TABLE public.communities (
     city TEXT NOT NULL,
     state TEXT,
     general_area TEXT,        -- Non-sensitive neighborhood landmark
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
     is_verified BOOLEAN NOT NULL DEFAULT true,
     active_member_count INT NOT NULL DEFAULT 0 CHECK (active_member_count >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -104,6 +106,8 @@ CREATE TABLE public.community_requests (
     proposed_address TEXT NOT NULL,
     proposed_delivery_pickup_point TEXT NOT NULL,
     proposed_taxi_pickup_point TEXT NOT NULL,
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
     status community_request_status NOT NULL DEFAULT 'pending',
     reviewed_by_staff_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     review_notes TEXT,
@@ -883,6 +887,72 @@ CREATE TRIGGER trg_community_request_decision
     FOR EACH ROW
     WHEN (OLD.status = 'pending'::community_request_status AND NEW.status IN ('approved'::community_request_status, 'rejected'::community_request_status))
     EXECUTE FUNCTION public.handle_community_request_decision();
+
+CREATE OR REPLACE FUNCTION public.approve_community_request(p_request_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_req public.community_requests%ROWTYPE;
+    v_slug TEXT;
+    v_comm_id UUID;
+BEGIN
+    SELECT * INTO v_req FROM public.community_requests WHERE id = p_request_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Request not found';
+    END IF;
+
+    v_slug := trim(both '-' from lower(regexp_replace(v_req.proposed_name, '[^a-zA-Z0-9]+', '-', 'g')));
+    
+    IF EXISTS (SELECT 1 FROM public.communities WHERE slug = v_slug) THEN
+        v_slug := v_slug || '-' || substr(md5(random()::text), 1, 4);
+    END IF;
+
+    -- 1. Create real community
+    INSERT INTO public.communities (
+        name, slug, type, college_affiliation, city, state, general_area, latitude, longitude, is_verified, active_member_count
+    ) VALUES (
+        v_req.proposed_name,
+        v_slug,
+        v_req.proposed_type,
+        v_req.college_affiliation,
+        'Gandhinagar',
+        'Gujarat',
+        v_req.proposed_name,
+        v_req.latitude,
+        v_req.longitude,
+        true,
+        1
+    ) RETURNING id INTO v_comm_id;
+
+    -- 2. Create pickup points
+    INSERT INTO public.community_pickup_points (
+        community_id, physical_address, delivery_pickup_point, taxi_pickup_point, gate_instructions
+    ) VALUES (
+        v_comm_id,
+        v_req.proposed_address,
+        v_req.proposed_delivery_pickup_point,
+        v_req.proposed_taxi_pickup_point,
+        'Verified residence pickup points'
+    );
+
+    -- 3. Auto-join creator as founding resident
+    INSERT INTO public.community_memberships (community_id, user_id, is_active)
+    VALUES (v_comm_id, v_req.requested_by_user_id, true)
+    ON CONFLICT (community_id, user_id) DO UPDATE SET is_active = true;
+
+    -- 4. Mark request approved
+    UPDATE public.community_requests
+    SET status = 'approved',
+        created_community_id = v_comm_id,
+        review_notes = 'Verified & approved'
+    WHERE id = p_request_id;
+
+    RETURN v_comm_id;
+END;
+$$;
 
 CREATE OR REPLACE FUNCTION public.is_staff_or_admin()
 RETURNS BOOLEAN

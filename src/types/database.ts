@@ -103,14 +103,14 @@ isOneToOne: false
                   ]
                 },"communities": {
                   Row: {
-                    "active_member_count": number,"city": string,"college_affiliation": string | null,"created_at": string,"description": string | null,"general_area": string | null,"id": string,"is_verified": boolean,"name": string,"slug": string,"state": string | null,"type": Database["public"]['Enums']["residential_type"],"updated_at": string
+                    "active_member_count": number,"city": string,"college_affiliation": string | null,"created_at": string,"description": string | null,"general_area": string | null,"id": string,"is_verified": boolean,"latitude": number | null,"longitude": number | null,"name": string,"slug": string,"state": string | null,"type": Database["public"]['Enums']["residential_type"],"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "active_member_count"?: number,"city": string,"college_affiliation"?: string | null,"created_at"?: string,"description"?: string | null,"general_area"?: string | null,"id"?: string,"is_verified"?: boolean,"name": string,"slug": string,"state"?: string | null,"type": Database["public"]['Enums']["residential_type"],"updated_at"?: string
+                    "active_member_count"?: number,"city": string,"college_affiliation"?: string | null,"created_at"?: string,"description"?: string | null,"general_area"?: string | null,"id"?: string,"is_verified"?: boolean,"latitude"?: number | null,"longitude"?: number | null,"name": string,"slug": string,"state"?: string | null,"type": Database["public"]['Enums']["residential_type"],"updated_at"?: string
                   }
                   Update: {
-                    "active_member_count"?: number,"city"?: string,"college_affiliation"?: string | null,"created_at"?: string,"description"?: string | null,"general_area"?: string | null,"id"?: string,"is_verified"?: boolean,"name"?: string,"slug"?: string,"state"?: string | null,"type"?: Database["public"]['Enums']["residential_type"],"updated_at"?: string
+                    "active_member_count"?: number,"city"?: string,"college_affiliation"?: string | null,"created_at"?: string,"description"?: string | null,"general_area"?: string | null,"id"?: string,"is_verified"?: boolean,"latitude"?: number | null,"longitude"?: number | null,"name"?: string,"slug"?: string,"state"?: string | null,"type"?: Database["public"]['Enums']["residential_type"],"updated_at"?: string
                   }
                   Relationships: [
                     
@@ -163,14 +163,14 @@ isOneToOne: true
                   ]
                 },"community_requests": {
                   Row: {
-                    "college_affiliation": string | null,"created_at": string,"created_community_id": string | null,"id": string,"proposed_address": string,"proposed_delivery_pickup_point": string,"proposed_name": string,"proposed_taxi_pickup_point": string,"proposed_type": Database["public"]['Enums']["residential_type"],"requested_by_user_id": string,"review_notes": string | null,"reviewed_by_staff_id": string | null,"status": Database["public"]['Enums']["community_request_status"],"updated_at": string
+                    "college_affiliation": string | null,"created_at": string,"created_community_id": string | null,"id": string,"latitude": number | null,"longitude": number | null,"proposed_address": string,"proposed_delivery_pickup_point": string,"proposed_name": string,"proposed_taxi_pickup_point": string,"proposed_type": Database["public"]['Enums']["residential_type"],"requested_by_user_id": string,"review_notes": string | null,"reviewed_by_staff_id": string | null,"status": Database["public"]['Enums']["community_request_status"],"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "college_affiliation"?: string | null,"created_at"?: string,"created_community_id"?: string | null,"id"?: string,"proposed_address": string,"proposed_delivery_pickup_point": string,"proposed_name": string,"proposed_taxi_pickup_point": string,"proposed_type": Database["public"]['Enums']["residential_type"],"requested_by_user_id": string,"review_notes"?: string | null,"reviewed_by_staff_id"?: string | null,"status"?: Database["public"]['Enums']["community_request_status"],"updated_at"?: string
+                    "college_affiliation"?: string | null,"created_at"?: string,"created_community_id"?: string | null,"id"?: string,"latitude"?: number | null,"longitude"?: number | null,"proposed_address": string,"proposed_delivery_pickup_point": string,"proposed_name": string,"proposed_taxi_pickup_point": string,"proposed_type": Database["public"]['Enums']["residential_type"],"requested_by_user_id": string,"review_notes"?: string | null,"reviewed_by_staff_id"?: string | null,"status"?: Database["public"]['Enums']["community_request_status"],"updated_at"?: string
                   }
                   Update: {
-                    "college_affiliation"?: string | null,"created_at"?: string,"created_community_id"?: string | null,"id"?: string,"proposed_address"?: string,"proposed_delivery_pickup_point"?: string,"proposed_name"?: string,"proposed_taxi_pickup_point"?: string,"proposed_type"?: Database["public"]['Enums']["residential_type"],"requested_by_user_id"?: string,"review_notes"?: string | null,"reviewed_by_staff_id"?: string | null,"status"?: Database["public"]['Enums']["community_request_status"],"updated_at"?: string
+                    "college_affiliation"?: string | null,"created_at"?: string,"created_community_id"?: string | null,"id"?: string,"latitude"?: number | null,"longitude"?: number | null,"proposed_address"?: string,"proposed_delivery_pickup_point"?: string,"proposed_name"?: string,"proposed_taxi_pickup_point"?: string,"proposed_type"?: Database["public"]['Enums']["residential_type"],"requested_by_user_id"?: string,"review_notes"?: string | null,"reviewed_by_staff_id"?: string | null,"status"?: Database["public"]['Enums']["community_request_status"],"updated_at"?: string
                   }
                   Relationships: [
                     {

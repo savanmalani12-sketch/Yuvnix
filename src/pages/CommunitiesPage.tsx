@@ -49,6 +49,8 @@ export const CommunitiesPage: React.FC = () => {
           city,
           state,
           general_area,
+          latitude,
+          longitude,
           is_verified,
           active_member_count,
           created_at,
