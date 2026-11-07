@@ -57,6 +57,7 @@ interface MapAddressPickerProps {
 // Default center: Knowledge Corridor / Gandhinagar
 const DEFAULT_CENTER: [number, number] = [23.1557, 72.6669];
 const DEFAULT_ZOOM = 15;
+export const COMMUNITY_PROXIMITY_RADIUS_METERS = 15;
 
 export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   value,
@@ -87,7 +88,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
           comm.latitude,
           comm.longitude
         );
-        if (dist <= 100) {
+        if (dist <= COMMUNITY_PROXIMITY_RADIUS_METERS) {
           if (!closest || dist < closest.distance) {
             closest = { community: comm, distance: dist };
           }
@@ -194,19 +195,19 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
         updatePosition(e.latlng.lat, e.latlng.lng, true);
       });
 
-      // Render existing communities & their 100m zones
+      // Render existing communities & their 15m zones
       existingCommunities.forEach((comm) => {
         if (comm.latitude != null && comm.longitude != null) {
           L.circle([comm.latitude, comm.longitude], {
-            radius: 100,
+            radius: COMMUNITY_PROXIMITY_RADIUS_METERS,
             color: '#f59e0b',
             fillColor: '#f59e0b',
-            fillOpacity: 0.12,
+            fillOpacity: 0.15,
             weight: 1.5,
             dashArray: '4, 4',
           })
             .addTo(map)
-            .bindPopup(`<strong>${comm.name}</strong><br/>100m Radius Zone`);
+            .bindPopup(`<strong>${comm.name}</strong><br/>15m Radius Zone`);
 
           L.circleMarker([comm.latitude, comm.longitude], {
             radius: 6,
@@ -511,7 +512,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
                 <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div className="space-y-0.5">
                   <span className="font-bold block">
-                    Existing Community Within 100m: &ldquo;{nearbyCommunityInMap.community.name}&rdquo; ({nearbyCommunityInMap.distance}m away)
+                    Existing Community Within 15m: &ldquo;{nearbyCommunityInMap.community.name}&rdquo; ({nearbyCommunityInMap.distance}m away)
                   </span>
                   <p className="text-[11px] text-muted-foreground leading-normal">
                     A residence already exists at this location. We recommend joining it to immediately pool groceries and share taxi rides.

@@ -51,7 +51,7 @@ export const CommunityRequestPage: React.FC = () => {
     },
   });
 
-  // Calculate nearest community within 100m radius
+  // Calculate nearest community within 15m radius
   const nearbyCommunity = useMemo(() => {
     if (!selectedMapLocation || existingCommunities.length === 0) return null;
     let closest: { community: typeof existingCommunities[0]; distance: number } | null = null;
@@ -63,7 +63,7 @@ export const CommunityRequestPage: React.FC = () => {
           c.latitude,
           c.longitude
         );
-        if (dist <= 100) {
+        if (dist <= 15) {
           if (!closest || dist < closest.distance) {
             closest = { community: c, distance: dist };
           }
@@ -277,7 +277,7 @@ export const CommunityRequestPage: React.FC = () => {
                   existingCommunities={existingCommunities}
                 />
 
-                {/* 100m Proximity Detection Alert */}
+                {/* 15m Proximity Detection Alert */}
                 {nearbyCommunity && (
                   <div className="p-4 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 text-amber-950 dark:text-amber-100 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
                     <div className="flex items-start gap-3">
@@ -287,7 +287,7 @@ export const CommunityRequestPage: React.FC = () => {
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400">
-                            Community Found Within 100m
+                            Community Found Within 15m
                           </span>
                           <span className="text-[10px] font-semibold bg-amber-500/20 px-2 py-0.5 rounded-full">
                             {nearbyCommunity.distance}m away
