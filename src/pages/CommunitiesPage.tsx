@@ -25,6 +25,7 @@ import {
 
 export const CommunitiesPage: React.FC = () => {
   const [search, setSearch] = useState('');
+  const [actionError, setActionError] = useState<string | null>(null);
   const navigate = useNavigate();
   const { user, isAuthenticated, signInWithGoogle } = useAuth();
   const queryClient = useQueryClient();
@@ -93,27 +94,81 @@ export const CommunitiesPage: React.FC = () => {
 
   const memberCommunityIds = new Set(myMemberships.map((m) => m.community_id));
 
-  // Join community mutation
+  // Join community mutation (uses atomic RPC join_community, with fallback to table upsert)
   const joinMutation = useMutation({
     mutationFn: async (communityId: string) => {
+      setActionError(null);
       if (!isAuthenticated || !user) {
         await signInWithGoogle();
         return;
       }
 
-      const { error } = await supabase.from('community_memberships').insert({
-        community_id: communityId,
-        user_id: user.id,
-        is_active: true,
+      // Try atomic RPC function first
+      const { error: rpcError } = await supabase.rpc('join_community', {
+        p_community_id: communityId,
       });
 
-      if (error) {
-        throw error;
+      if (rpcError) {
+        // If RPC function not yet provisioned in DB, fall back to upsert
+        console.warn('join_community RPC error, attempting direct upsert:', rpcError.message);
+        const { error: upsertError } = await supabase.from('community_memberships').upsert(
+          {
+            community_id: communityId,
+            user_id: user.id,
+            is_active: true,
+          },
+          { onConflict: 'community_id,user_id' }
+        );
+
+        if (upsertError) {
+          throw new Error(upsertError.message || 'Failed to join community.');
+        }
       }
     },
     onSuccess: () => {
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ['my_memberships'] });
       queryClient.invalidateQueries({ queryKey: ['communities'] });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : 'Unable to join community. Please try again.';
+      console.error('Failed to join community:', err);
+      setActionError(message);
+    },
+  });
+
+  // Leave community mutation
+  const leaveMutation = useMutation({
+    mutationFn: async (communityId: string) => {
+      setActionError(null);
+      if (!isAuthenticated || !user) return;
+
+      const { error: rpcError } = await supabase.rpc('leave_community', {
+        p_community_id: communityId,
+      });
+
+      if (rpcError) {
+        console.warn('leave_community RPC error, attempting direct update:', rpcError.message);
+        const { error: updateError } = await supabase
+          .from('community_memberships')
+          .update({ is_active: false })
+          .eq('community_id', communityId)
+          .eq('user_id', user.id);
+
+        if (updateError) {
+          throw new Error(updateError.message || 'Failed to leave community.');
+        }
+      }
+    },
+    onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ['my_memberships'] });
+      queryClient.invalidateQueries({ queryKey: ['communities'] });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : 'Unable to leave community.';
+      console.error('Failed to leave community:', err);
+      setActionError(message);
     },
   });
 
@@ -150,6 +205,19 @@ export const CommunitiesPage: React.FC = () => {
           className="pl-10 h-12 bg-card"
         />
       </div>
+
+      {/* Action Error Banner */}
+      {actionError && (
+        <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs font-medium flex items-center justify-between gap-3 mb-6 animate-in fade-in">
+          <span>{actionError}</span>
+          <button
+            onClick={() => setActionError(null)}
+            className="text-destructive font-bold text-sm hover:opacity-80 px-1"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Loading state */}
       {isLoading && (
@@ -258,20 +326,39 @@ export const CommunitiesPage: React.FC = () => {
                     </span>
 
                     {isMember ? (
-                      <Badge variant="outline" className="text-xs gap-1 border-primary/40 text-primary">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Resident Member</span>
-                      </Badge>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline" className="text-xs gap-1 border-primary/40 text-primary bg-primary/5">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Resident</span>
+                        </Badge>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-xs text-muted-foreground hover:text-destructive h-7 px-2"
+                          disabled={leaveMutation.isPending && leaveMutation.variables === community.id}
+                          onClick={() => leaveMutation.mutate(community.id)}
+                          title="Leave this residence"
+                        >
+                          {leaveMutation.isPending && leaveMutation.variables === community.id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            'Leave'
+                          )}
+                        </Button>
+                      </div>
                     ) : (
                       <Button
                         size="sm"
                         variant="subtle"
                         className="text-xs"
-                        disabled={joinMutation.isPending}
+                        disabled={joinMutation.isPending && joinMutation.variables === community.id}
                         onClick={() => joinMutation.mutate(community.id)}
                       >
-                        {joinMutation.isPending ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        {joinMutation.isPending && joinMutation.variables === community.id ? (
+                          <span className="flex items-center gap-1.5">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Joining...</span>
+                          </span>
                         ) : (
                           'Join Residence'
                         )}

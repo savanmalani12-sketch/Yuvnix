@@ -1032,9 +1032,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.communities TO authenticated;
 GRANT SELECT ON public.community_pickup_points TO anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.community_pickup_points TO authenticated;
 
--- community_memberships: Students can request join (is_active=false) / leave; staff can activate
-GRANT SELECT, INSERT, DELETE ON public.community_memberships TO authenticated;
-GRANT UPDATE (is_active) ON public.community_memberships TO authenticated;
+-- community_memberships: Students can join / leave verified communities; staff management
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.community_memberships TO authenticated;
 
 -- community_requests: Students can view & submit; staff can update review status & notes
 GRANT SELECT, INSERT ON public.community_requests TO authenticated;
@@ -1165,17 +1164,21 @@ CREATE POLICY "memberships_insert_authorized"
     TO authenticated
     WITH CHECK (
         public.is_staff_or_admin() OR
-        (auth.uid() = user_id AND is_active = false AND EXISTS (
+        (auth.uid() = user_id AND EXISTS (
             SELECT 1 FROM public.communities c
             WHERE c.id = community_id AND c.is_verified = true
         ))
     );
 
-CREATE POLICY "memberships_update_staff_only"
+CREATE POLICY "memberships_update_self_or_staff"
     ON public.community_memberships FOR UPDATE
     TO authenticated
-    USING (public.is_staff_or_admin())
-    WITH CHECK (public.is_staff_or_admin());
+    USING (
+        user_id = auth.uid() OR public.is_staff_or_admin()
+    )
+    WITH CHECK (
+        user_id = auth.uid() OR public.is_staff_or_admin()
+    );
 
 CREATE POLICY "memberships_delete_self"
     ON public.community_memberships FOR DELETE

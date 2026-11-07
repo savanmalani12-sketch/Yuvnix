@@ -369,6 +369,12 @@ isOneToOne: false
 "is_staff_or_admin":
 { Args: Record<PropertyKey, never>; Returns: boolean
                            },
+"join_community":
+{ Args: { "p_community_id": string }; Returns: Json
+                           },
+"leave_community":
+{ Args: { "p_community_id": string }; Returns: Json
+                           },
 "mark_notification_as_read":
 { Args: { "p_notification_id": string }; Returns: boolean
                            },
