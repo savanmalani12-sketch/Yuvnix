@@ -1496,23 +1496,85 @@ $$\text{Level 1: } \texttt{public.group_carts} \prec \text{Level 2: } \texttt{pu
 
 ---
 
-## 9. Comprehensive SQL Security Test Harness (v1.1 Specification)
+## 9. Comprehensive SQL Security Test Harness (v1.2 Specification)
 
 > **Execution Protocol Notice:**  
 > **STATUS: Documented — Not Executed — Pending Independent Verification**  
-> This test harness is a rigorous engineering specification designed for Phase 2 validation against a live Supabase PostgreSQL 15 database instance. In strict compliance with operational boundaries, zero migrations, zero database modifications, and zero tests have been executed on live infrastructure in this phase.
+> This test harness is a rigorous engineering specification designed for validation against an isolated local PostgreSQL 15 / Supabase CLI test environment. In strict compliance with operational boundaries, zero migrations, zero database modifications, and zero tests have been executed on live infrastructure in this phase.
 
 ---
 
-### 9.1 Authentication Context & Role Simulation Protocol
+### 9.1 Recommended Local Test Environment (Docker / Supabase CLI)
 
-In Supabase, client API requests through PostgREST execute under the PostgreSQL database role `authenticated`. If tests run as the default superuser (`postgres`), PostgreSQL bypasses all Row Level Security (RLS) policies and table grants. Therefore, all test blocks must execute under explicit role simulation:
+To verify the SQL security and concurrency behavior without requiring production Supabase credentials or risking live data:
+
+#### Option A: Disposable Local Supabase Environment (Recommended)
+Using the official Supabase CLI, engineers spin up an isolated local stack running PostgreSQL 15, Auth, and PostgREST in Docker:
+```bash
+# 1. Initialize local Supabase configuration
+supabase init
+
+# 2. Start local disposable containers
+supabase start
+
+# 3. Connection endpoint (disposable local instance):
+# postgresql://postgres:postgres@localhost:54322/postgres
+
+# 4. Execute DDL and Test Harness in local sandbox:
+psql -h localhost -p 54322 -U postgres -d postgres -f docs/ARCHITECTURE.md
+
+# 5. Stop and destroy local test environment:
+supabase stop
+```
+
+#### Option B: Standalone PostgreSQL 15 Docker Container with Mock Auth Schema
+For automated CI pipelines or lightweight testing without full Supabase services:
+```bash
+# 1. Launch vanilla PostgreSQL 15 container
+docker run --name yuvnix-test-pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:15
+
+# 2. Apply mock Supabase auth schema and session helper functions
+```
+```sql
+-- Minimal mock auth schema for local testing
+CREATE SCHEMA IF NOT EXISTS auth;
+
+CREATE TABLE IF NOT EXISTS auth.users (
+    id UUID PRIMARY KEY,
+    email TEXT UNIQUE,
+    raw_user_meta_data JSONB
+);
+
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
+  SELECT coalesce(
+    nullif(current_setting('request.jwt.claim.sub', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+  )::uuid;
+$$;
+
+CREATE OR REPLACE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT coalesce(
+    nullif(current_setting('request.jwt.claim.role', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
+  )::text;
+$$;
+
+-- Create PostgREST client role
+CREATE ROLE authenticated NOLOGIN NOINHERIT;
+GRANT USAGE ON SCHEMA public TO authenticated;
+```
+
+---
+
+### 9.2 Authentication Context & Role Simulation Protocol
+
+In Supabase, client API requests through PostgREST execute under the PostgreSQL database role `authenticated`. If tests run as the default superuser (`postgres`), PostgreSQL bypasses all Row Level Security (RLS) policies and table grants. Therefore, all test blocks execute under explicit role simulation:
 
 1. **Role Context:** Every test transaction executes `SET LOCAL ROLE authenticated;`, discarding superuser privileges for the transaction.
 2. **JWT Claims Injection:** PostgREST passes JWT claims through PostgreSQL session settings. Tests inject these claims via `request.jwt.claim.sub` and `request.jwt.claims`.
 3. **Session Verification:** Tests verify `auth.uid()` derivation immediately after configuration. If `auth.uid()` does not match the target fixture UUID, the test aborts.
 4. **Support Staff Simulation:** In Yuvnix, support staff are not a separate PostgreSQL role; they connect as `authenticated` with `public.profiles.role = 'support_staff'`. Functions such as `public.is_staff_or_admin()` query `public.profiles` for `auth.uid()` to verify administrative authority.
-5. **Automatic Teardown:** Every test runs inside a `BEGIN ... ROLLBACK;` transaction, ensuring zero persistent mutations during test evaluation.
+5. **Automatic Teardown:** Every test runs inside an isolated `BEGIN ... ROLLBACK;` transaction block, ensuring zero persistent mutations during test evaluation.
 
 ```sql
 -- Standard User Session Simulation Template
@@ -1538,7 +1600,7 @@ ROLLBACK;
 
 ---
 
-### 9.2 Test Fixtures Setup & Teardown Protocol
+### 9.3 Test Fixtures Setup & Teardown Protocol
 
 Fixtures are provisioned by the `postgres` administrator prior to executing the test suite to ensure tests evaluate security controls rather than missing-row errors.
 
@@ -1559,8 +1621,8 @@ Fixtures are provisioned by the `postgres` administrator prior to executing the 
 * **Locked Cart (`cart_locked`):** `dddddddd-dddd-dddd-dddd-dddddddddddd` (Host: Student A, `status: 'locked'`, `lock_at: now() - interval '10 minutes'`)
 * **Ride with 1 Seat Available (`ride_active`):** `eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee` (Host: Student A, `total_seats: 4`, `available_seats: 1`, `status: 'open'`, `departure_time: now() + interval '4 hours'`)
   * **Pending Participant:** Student B (`seats_reserved: 1`, `status: 'pending'`)
-* **Ride with Accepted Participant (`ride_accepted`):** `ffffffff-ffff-ffff-ffff-ffffffffffff` (Host: Student A, `total_seats: 4`, `available_seats: 2`, `status: 'open'`, `departure_time: now() + interval '4 hours'`)
-  * **Accepted Participant:** Student B (`seats_reserved: 1`, `status: 'accepted'`)
+* **Ride for Cancellation Tests (`ride_canc`):** `ffffffff-ffff-ffff-ffff-ffffffffffff` (Host: Student A, `total_seats: 4`, `available_seats: 2`, `status: 'open'`, `departure_time: now() + interval '4 hours'`)
+  * **Pending Participant:** Student B (`seats_reserved: 1`, `status: 'pending'`)
 * **Pending Community Request (`req_pending`):** `77777777-7777-7777-7777-777777777777` (Requested by Student A, `status: 'pending'`)
 
 ```sql
@@ -1623,7 +1685,7 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.ride_participants (ride_id, user_id, seats_reserved, status) VALUES
     ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', '22222222-2222-2222-2222-222222222222', 1, 'pending'),
-    ('ffffffff-ffff-ffff-ffff-ffffffffffff', '22222222-2222-2222-2222-222222222222', 1, 'accepted')
+    ('ffffffff-ffff-ffff-ffff-ffffffffffff', '22222222-2222-2222-2222-222222222222', 1, 'pending')
 ON CONFLICT (ride_id, user_id) DO NOTHING;
 
 -- 6. Pending Community Request
@@ -1652,57 +1714,13 @@ DELETE FROM public.communities WHERE id IN (
 
 ---
 
-### 9.3 Corrected PostgreSQL SQLSTATE Expectations
-
-PostgreSQL emits specific standardized error codes depending on the enforcement layer:
-
-| SQLSTATE | Condition Name | Exact Database Enforcement Layer in Yuvnix |
-| :---: | :--- | :--- |
-| **`42501`** | `insufficient_privilege` | 1. Table or column-level privilege missing (`GRANT ... REVOKE ...`).<br>2. Ordinary **Row Level Security (RLS)** policy rejection on `INSERT` or `UPDATE` (`WITH CHECK` failure).<br>*(Note: `44000` is SQL standard `with_check_option_violation` used for SQL views, not table RLS)*. |
-| **`P0001`** | `raise_exception` | Custom PL/pgSQL `RAISE EXCEPTION` explicitly thrown from a database trigger (`trg_prevent_role_escalation`, `trg_enforce_cart_item_lock`) or transactional RPC (`request_ride_seats`, `accept_ride_participant`, etc.). |
-| **`23514`** | `check_violation` | Relational table `CHECK (...)` constraint violation (e.g., `available_seats >= 0`, `quantity > 0`). |
-| **`23505`** | `unique_violation` | Relational `UNIQUE` index collision (e.g., duplicate key on `(ride_id, user_id)`). |
-| **`0 rows`**| Quiet RLS Filtering | `SELECT` queries filtered by RLS `USING` conditions return 0 rows without raising an exception. `UPDATE` statements targeting filtered rows affect 0 rows (`ROW_COUNT = 0`). |
-
-#### Corrected Test Runner Template
-The test harness initializes `v_succeeded := false`, traps only expected SQLSTATEs, allows unhandled errors (e.g. broken fixtures, missing relations) to propagate, and asserts failure **outside** the exception block:
-
-```sql
-DO $$
-DECLARE
-    v_succeeded BOOLEAN := false;
-    v_sqlstate TEXT;
-    v_sqlerrm TEXT;
-BEGIN
-    BEGIN
-        <UNAUTHORIZED_OPERATION>;
-        v_succeeded := true;
-    EXCEPTION
-        WHEN insufficient_privilege THEN -- SQLSTATE 42501 (Grant or RLS WITH CHECK)
-            v_sqlstate := SQLSTATE; v_sqlerrm := SQLERRM;
-        WHEN raise_exception THEN        -- SQLSTATE P0001 (PL/pgSQL Trigger or Function)
-            v_sqlstate := SQLSTATE; v_sqlerrm := SQLERRM;
-        WHEN check_violation THEN        -- SQLSTATE 23514 (Table CHECK Constraint)
-            v_sqlstate := SQLSTATE; v_sqlerrm := SQLERRM;
-    END;
-
-    IF v_succeeded THEN
-        RAISE EXCEPTION 'TEST FAILED: Security control bypassed! Unauthorized action executed successfully.';
-    END IF;
-
-    RAISE NOTICE 'TEST PASSED: Blocked with expected SQLSTATE % (%)', v_sqlstate, v_sqlerrm;
-END $$;
-```
-
----
-
-### 9.4 Comprehensive Security Control Test Suite (TEST-SEC-01 to SEC-10)
+### 9.4 Comprehensive Security Control Test Suite (TEST-SEC-01 to SEC-10B)
 
 #### TEST-SEC-01: Student Role Escalation
 * **Operation:** Student A attempts `UPDATE public.profiles SET role = 'support_staff' WHERE id = '11111111-1111-1111-1111-111111111111'`.
 * **Expected Enforcement & SQLSTATE:**
-  * *Primary Layer:* PostgreSQL column-level privilege check. Column `role` is omitted from `GRANT UPDATE (full_name, avatar_url) ON profiles TO authenticated`. Operation rejected with **`42501`** (`insufficient_privilege`).
-  * *Defense-in-Depth Layer:* If column privileges were ever bypassed, trigger `trg_prevent_role_escalation` fires `BEFORE UPDATE OF role` and throws custom exception with **`P0001`** (`raise_exception`).
+  * *Primary Layer:* PostgreSQL column-level privilege check. Column `role` is omitted from `GRANT UPDATE (full_name, avatar_url) ON profiles TO authenticated`. Rejected with **`42501`** (`insufficient_privilege`).
+  * *Defense-in-Depth Layer:* Trigger `trg_prevent_role_escalation` fires `BEFORE UPDATE OF role` and throws exception with **`P0001`** (`raise_exception`).
 ```sql
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -1736,9 +1754,8 @@ ROLLBACK;
 * **Operation:** Student A queries `community_pickup_points` for their joined community and an unjoined community.
 * **Enforcement Layer:** RLS policy `pickup_points_select_members_only`.
 * **Controls:**
-  1. *Fixture Existence Check:* Confirms `comm_verified` and `comm_other` exist in database.
-  2. *Positive Control:* Student A reads their own community's coordinates (`comm_verified`). Query must return **exactly 1 row** matching fixture values (`Gate 1 Security Desk`, `Gate 1 Circle Curb`).
-  3. *Negative Control:* Student A reads `comm_other` coordinates. Query must return **exactly 0 rows**.
+  1. *Positive Control:* Student A reads their own community coordinates (`comm_verified`). Query returns **exactly 1 row** matching fixture values (`Gate 1 Security Desk`, `Gate 1 Circle Curb`).
+  2. *Negative Control:* Student A reads `comm_other` coordinates. Query returns **exactly 0 rows**.
 ```sql
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -1781,7 +1798,7 @@ ROLLBACK;
 #### TEST-SEC-03: Cart Chat Access Isolation
 * **Operation:** Student B (non-participant in `cart_open`) attempts `INSERT INTO cart_messages`.
 * **Enforcement Layer:** RLS policy `cart_messages_insert_members_only` `WITH CHECK`.
-* **Expected SQLSTATE:** **`42501`** (`insufficient_privilege` — PostgreSQL RLS check violation).
+* **Expected SQLSTATE:** **`42501`** (`insufficient_privilege`).
 ```sql
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -1811,7 +1828,7 @@ ROLLBACK;
 ```
 
 #### TEST-SEC-04: Ride Chat Access Isolation
-* **Operation:** Student B (status is `pending` on `ride_active`) attempts to read and post in `ride_messages`.
+* **Operation:** Student B (status `pending` on `ride_active`) attempts to read and post in `ride_messages`.
 * **Enforcement Layer:** RLS policies `ride_messages_select_accepted_only` and `ride_messages_insert_accepted_only`.
 * **Expected Result:** SELECT returns **0 rows**; INSERT rejected with SQLSTATE **`42501`** (`insufficient_privilege`).
 ```sql
@@ -1825,7 +1842,6 @@ DECLARE
     v_count INT;
     v_sqlstate TEXT;
 BEGIN
-    -- Read Isolation Control
     SELECT count(*) INTO v_count 
     FROM public.ride_messages 
     WHERE ride_id = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
@@ -1834,7 +1850,6 @@ BEGIN
         RAISE EXCEPTION 'TEST-SEC-04 FAILED: Pending rider was able to read ride messages!';
     END IF;
 
-    -- Write Isolation Control
     BEGIN
         INSERT INTO public.ride_messages (ride_id, sender_id, message_text)
         VALUES ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', '22222222-2222-2222-2222-222222222222', 'Pending rider message');
@@ -1855,8 +1870,8 @@ ROLLBACK;
 
 #### TEST-SEC-05: Direct Mutations on `ride_participants`
 * **Operation:** Student B attempts direct table `INSERT`, `UPDATE`, and `DELETE` on `ride_participants`.
-* **Enforcement Layer:** Table privilege revocation (`REVOKE ALL ON public.ride_participants FROM PUBLIC, anon; GRANT SELECT ON public.ride_participants TO authenticated;`). Direct writes are omitted.
-* **Expected SQLSTATE:** **`42501`** (`insufficient_privilege`) for all three operations.
+* **Enforcement Layer:** Table privilege revocation (`REVOKE ALL ON public.ride_participants FROM PUBLIC, anon; GRANT SELECT ON public.ride_participants TO authenticated;`).
+* **Expected SQLSTATE:** **`42501`** (`insufficient_privilege`).
 ```sql
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -1898,8 +1913,8 @@ ROLLBACK;
 
 #### TEST-SEC-06: Cart Item `cart_id` Foreign Key Tampering
 * **Operation:** Student A attempts to reassign their added item to another cart via direct UPDATE.
-* **Enforcement Layer:** Column privilege revocation. Column `cart_id` is omitted from `GRANT UPDATE (item_name, quantity, unit_price_estimate, notes) ON cart_items TO authenticated`.
-* **Expected SQLSTATE:** **`42501`** (`insufficient_privilege` on column `cart_id`).
+* **Enforcement Layer:** Column privilege revocation on `cart_id`.
+* **Expected SQLSTATE:** **`42501`** (`insufficient_privilege`).
 ```sql
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -1962,7 +1977,7 @@ ROLLBACK;
 
 #### TEST-SEC-08: Notification Forgery
 * **Operation:** Student A attempts direct SQL `INSERT INTO public.notifications`.
-* **Enforcement Layer:** Table privilege revocation (`INSERT` on `notifications` is revoked from `authenticated`).
+* **Enforcement Layer:** Table privilege revocation.
 * **Expected SQLSTATE:** **`42501`** (`insufficient_privilege`).
 ```sql
 BEGIN;
@@ -1993,7 +2008,7 @@ ROLLBACK;
 
 #### TEST-SEC-09: Notification Title and Body Modification
 * **Operation:** Student A attempts to modify the title or body of a received notification.
-* **Enforcement Layer:** Column privilege revocation. Column `title` is omitted from `GRANT UPDATE (is_read) ON notifications TO authenticated`.
+* **Enforcement Layer:** Column privilege revocation on `title` and `body`.
 * **Expected SQLSTATE:** **`42501`** (`insufficient_privilege`).
 ```sql
 BEGIN;
@@ -2028,22 +2043,14 @@ END $$;
 ROLLBACK;
 ```
 
-#### TEST-SEC-10A: Community Creation Governance (Student Negative vs. Staff Positive)
-* **Operation:** Student attempts direct community creation; Support staff executes valid creation.
-* **Enforcement Layer:** Table privilege revocation and RLS policy `communities_staff_all`.
-* **Controls:**
-  1. *Pre-Condition:* Verify slug `staff-created-community` does not exist prior to test.
-  2. *Student Negative Control:* Student attempts `INSERT INTO communities`. Must fail with SQLSTATE **`42501`**. Verify row count remains 0.
-  3. *Staff Positive Control:* Staff executes identical `INSERT INTO communities`. Must succeed. Verify row exists.
-```sql
-BEGIN;
--- 1. Pre-condition verification (as superuser)
-SET ROLE postgres;
-DELETE FROM public.communities WHERE slug = 'staff-created-community';
+#### TEST-SEC-10A: Community Creation Governance (Fully Isolated Negative & Positive Blocks)
+* **Design:** Tests student rejection and staff creation in two separate, independent transactions with deterministic pre-cleanup, ensuring repeated test runs never fail on duplicate slugs.
 
--- 2. Student Negative Control
+```sql
+-- SUB-TEST 10A-1: Student Direct Creation Rejection (Isolated Transaction)
+BEGIN;
 SET ROLE authenticated;
-SET LOCAL "request.jwt.claim.sub" = '11111111-1111-1111-1111-111111111111';
+SET LOCAL "request.jwt.claim.sub" = '11111111-1111-1111-1111-111111111111'; -- Alice Student
 
 DO $$
 DECLARE
@@ -2051,43 +2058,51 @@ DECLARE
 BEGIN
     BEGIN
         INSERT INTO public.communities (name, slug, type, city)
-        VALUES ('Student Rogue PG', 'staff-created-community', 'pg', 'Gandhinagar');
+        VALUES ('Student Rogue PG', 'staff-created-comm-test', 'pg', 'Gandhinagar');
         v_student_ok := true;
     EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 
     IF v_student_ok THEN
-        RAISE EXCEPTION 'TEST-SEC-10A FAILED: Student directly created a community!';
+        RAISE EXCEPTION 'TEST-SEC-10A-1 FAILED: Student directly created a community!';
     END IF;
-END $$;
 
--- 3. Staff Positive Control
-SET ROLE authenticated;
+    RAISE NOTICE 'TEST-SEC-10A-1 PASSED: Student community creation blocked with SQLSTATE 42501.';
+END $$;
+ROLLBACK;
+
+-- SUB-TEST 10A-2: Support Staff Authorized Creation (Isolated Transaction)
+BEGIN;
+-- Deterministic pre-cleanup in case of dirty transaction state
+DELETE FROM public.communities WHERE slug = 'staff-created-comm-test';
+
+SET LOCAL ROLE authenticated;
 SET LOCAL "request.jwt.claim.sub" = '33333333-3333-3333-3333-333333333333'; -- Carol Staff
+SET LOCAL "request.jwt.claims" = jsonb_build_object(
+    'sub', '33333333-3333-3333-3333-333333333333',
+    'role', 'authenticated'
+)::text;
 
 INSERT INTO public.communities (id, name, slug, type, city, is_verified)
-VALUES ('88888888-8888-8888-8888-888888888888', 'Staff Verified Residence', 'staff-created-community', 'hostel', 'Gandhinagar', true);
+VALUES ('88888888-8888-8888-8888-888888888888', 'Staff Verified Residence', 'staff-created-comm-test', 'hostel', 'Gandhinagar', true);
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.communities WHERE slug = 'staff-created-community') THEN
-        RAISE EXCEPTION 'TEST-SEC-10A FAILED: Support staff insert did not persist!';
+    IF NOT EXISTS (SELECT 1 FROM public.communities WHERE slug = 'staff-created-comm-test') THEN
+        RAISE EXCEPTION 'TEST-SEC-10A-2 FAILED: Staff insert did not persist in database!';
     END IF;
-    RAISE NOTICE 'TEST-SEC-10A PASSED: Student blocked with 42501; Staff successfully created community.';
+    RAISE NOTICE 'TEST-SEC-10A-2 PASSED: Authenticated staff member successfully created community.';
 END $$;
 ROLLBACK;
 ```
 
-#### TEST-SEC-10B: Community Request Approval Governance (Student Negative vs. Staff Positive)
-* **Operation:** Student attempts to self-approve a community request; Support staff executes valid approval.
-* **Enforcement Layer:** RLS policy `community_requests_update_staff_only` (`USING (is_staff_or_admin())`).
-* **Controls:**
-  1. *Student Negative Control:* Student A attempts `UPDATE community_requests SET status = 'approved'`. RLS policy filters row (`ROW_COUNT = 0`). Verify status remains `'pending'`.
-  2. *Staff Positive Control:* Staff executes approval update. Operation succeeds, sets status to `'approved'`, and trigger `trg_community_request_decision` dispatches notification.
+#### TEST-SEC-10B: Community Request Approval Governance (Fully Isolated Negative & Positive Blocks)
+* **Design:** Tests student self-approval rejection and staff approval in separate transactions, ensuring the request remains pending for repeated test executions.
+
 ```sql
+-- SUB-TEST 10B-1: Student Self-Approval Rejection (Isolated Transaction)
 BEGIN;
--- 1. Student Negative Control
-SET ROLE authenticated;
-SET LOCAL "request.jwt.claim.sub" = '11111111-1111-1111-1111-111111111111';
+SET LOCAL ROLE authenticated;
+SET LOCAL "request.jwt.claim.sub" = '11111111-1111-1111-1111-111111111111'; -- Alice Student
 
 DO $$
 DECLARE
@@ -2100,18 +2115,26 @@ BEGIN
     GET DIAGNOSTICS v_rows_updated = ROW_COUNT;
 
     IF v_rows_updated > 0 THEN
-        RAISE EXCEPTION 'TEST-SEC-10B FAILED: Student self-approved their community request!';
+        RAISE EXCEPTION 'TEST-SEC-10B-1 FAILED: Student self-approved their community request!';
     END IF;
 
     SELECT status INTO v_status FROM public.community_requests WHERE id = '77777777-7777-7777-7777-777777777777';
     IF v_status != 'pending'::community_request_status THEN
-        RAISE EXCEPTION 'TEST-SEC-10B FAILED: Request status mutated away from pending!';
+        RAISE EXCEPTION 'TEST-SEC-10B-1 FAILED: Request status mutated away from pending!';
     END IF;
-END $$;
 
--- 2. Staff Positive Control
-SET ROLE authenticated;
+    RAISE NOTICE 'TEST-SEC-10B-1 PASSED: Student update affected 0 rows; status remained pending.';
+END $$;
+ROLLBACK;
+
+-- SUB-TEST 10B-2: Support Staff Authorized Approval (Isolated Transaction)
+BEGIN;
+SET LOCAL ROLE authenticated;
 SET LOCAL "request.jwt.claim.sub" = '33333333-3333-3333-3333-333333333333'; -- Carol Staff
+SET LOCAL "request.jwt.claims" = jsonb_build_object(
+    'sub', '33333333-3333-3333-3333-333333333333',
+    'role', 'authenticated'
+)::text;
 
 UPDATE public.community_requests 
 SET status = 'approved'::community_request_status,
@@ -2124,9 +2147,9 @@ DECLARE
 BEGIN
     SELECT status INTO v_status FROM public.community_requests WHERE id = '77777777-7777-7777-7777-777777777777';
     IF v_status != 'approved'::community_request_status THEN
-        RAISE EXCEPTION 'TEST-SEC-10B FAILED: Support staff approval failed to transition status to approved!';
+        RAISE EXCEPTION 'TEST-SEC-10B-2 FAILED: Staff approval failed to set status to approved!';
     END IF;
-    RAISE NOTICE 'TEST-SEC-10B PASSED: Student update affected 0 rows; Staff approval successfully transitioned status to approved.';
+    RAISE NOTICE 'TEST-SEC-10B-2 PASSED: Authenticated staff member successfully approved request.';
 END $$;
 ROLLBACK;
 ```
@@ -2135,12 +2158,9 @@ ROLLBACK;
 
 ### 9.5 Corrected Multi-Session Concurrency Test Suite (CONC-01 to CONC-07)
 
-> **PostgreSQL Concurrency Reality:**  
-> The table constraint `UNIQUE (ride_id, user_id)` guarantees uniqueness for the *same* student on a given ride. Requests from *two different students* have distinct composite keys and **do not serialize on this constraint**. Concurrency is governed by Level 1 row locks (`shared_rides FOR UPDATE` / `FOR SHARE`) and explicit RPC guard assertions.
-
 #### TEST-CONC-01: Two Different Students Requesting Same Ride Concurrently
 * **Setup:** Ride `eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee` with 1 seat available. Student B and Student C request seats concurrently in Session 1 and Session 2.
-* **Mechanism:** Both acquire `FOR SHARE` on `shared_rides` (compatible locks). Neither blocks the other. Because `user_id` values differ (`usr_student_b` vs `usr_student_c`), there is **no collision on `UNIQUE (ride_id, user_id)`**. Both requests insert as `pending`.
+* **Mechanism:** Both acquire `FOR SHARE` on `shared_rides` (compatible locks). Neither blocks the other. Because `user_id` values differ (`usr_student_b` vs `usr_student_c`), there is **no collision on `UNIQUE (ride_id, user_id)`**. Both requests insert with `status = 'pending'`.
 ```sql
 -- SESSION 1 (Student B: 22222222-2222-2222-2222-222222222222)
 BEGIN;
@@ -2158,14 +2178,14 @@ SELECT public.request_ride_seats('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 1);
 COMMIT; -- in Session 1
 COMMIT; -- in Session 2
 ```
-* **Expected Result:** Both requests register with `status = 'pending'`. The final seat allocation is resolved during host acceptance.
+* **Expected Result:** Both requests register with `status = 'pending'`. Final seat allocation is resolved during host acceptance.
 
-#### TEST-CONC-02: Same Student Rapid Double-Clicking Seat Request
+#### TEST-CONC-02: Same Student Rapid Double Request (Unique Constraint Serialization)
 * **Setup:** Student B submits two requests for the same ride simultaneously in Session 1 and Session 2.
 * **Mechanism:**
   1. Both sessions acquire `shared_rides FOR SHARE`.
   2. Both execute: `INSERT INTO ride_participants (ride_id, user_id, ...) VALUES (...) ON CONFLICT (ride_id, user_id) DO UPDATE ... WHERE ride_participants.status IN ('declined', 'cancelled')`.
-  3. **Here `UNIQUE (ride_id, user_id)` forces serialization:** Session 2 waits on the unique index tuple lock held by Session 1.
+  3. **`UNIQUE (ride_id, user_id)` forces serialization:** Session 2 waits on the unique index tuple lock held by Session 1.
   4. Session 1 completes the insert and commits `status = 'pending'`.
   5. Session 2 unblocks. The row exists with `status = 'pending'`, so the `WHERE status IN ('declined', 'cancelled')` condition evaluates to `FALSE`.
   6. Zero rows are updated (`NOT FOUND = true`).
@@ -2176,7 +2196,6 @@ BEGIN;
 SET LOCAL ROLE authenticated;
 SET LOCAL "request.jwt.claim.sub" = '22222222-2222-2222-2222-222222222222';
 SELECT public.request_ride_seats('ffffffff-ffff-ffff-ffff-ffffffffffff', 1);
--- (Do not commit yet)
 
 -- SESSION 2 (Student B, Tab 2)
 BEGIN;
@@ -2192,7 +2211,7 @@ ROLLBACK; -- in Session 2
 
 #### TEST-CONC-03: Two Host Sessions Accepting the Final Available Seat
 * **Setup:** Ride `eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee` has `available_seats = 1`. Student B and Student C are pending. Host accepts Student B in Session 1 and Student C in Session 2.
-* **Mechanism:** Serialized by Level 1 row lock (`shared_rides FOR UPDATE`). Session 1 locks Level 1, decrements `available_seats = 0`, sets status to `'full'`, and commits. Session 2 unblocks, re-reads `available_seats = 0`, detects `0 < 1`, and raises custom PL/pgSQL exception **`P0001`**: `Cannot accept: Available seats (0) less than requested (1)`.
+* **Mechanism:** Serialized by Level 1 row lock (`shared_rides FOR UPDATE`). Session 1 locks Level 1, decrements `available_seats = 0`, sets status to `'full'`, and commits. Session 2 unblocks, re-reads committed `available_seats = 0`, detects `0 < 1`, and raises custom PL/pgSQL exception **`P0001`**: `Cannot accept: Available seats (0) less than requested (1)`.
 ```sql
 -- SESSION 1 (Host Acceptance for Student B)
 BEGIN;
@@ -2236,30 +2255,96 @@ COMMIT; -- in Session 1
 ROLLBACK; -- in Session 2
 ```
 
-#### TEST-CONC-05: Ride Cancellation vs. Host Acceptance Race
-* **Setup:** Host accepts Student B in Session 1 while Student B cancels in Session 2.
-* **Mechanism:** Both transactions acquire locks in strict hierarchy: `shared_rides` (Level 1) $ightarrow$ `ride_participants` (Level 2). Session 2 blocks on Level 1. Zero deadlocks can occur. If Session 1 commits first, Student B becomes `accepted`; Session 2 unblocks, sees `status = 'accepted'`, transitions to `cancelled`, and restores seats safely.
+#### TEST-CONC-05A: Cancellation vs. Acceptance Race (Ordering 1: Host Accept Commits First)
+* **Initial State:** Ride `ffffffff-ffff-ffff-ffff-ffffffffffff` (`total_seats = 4`, `available_seats = 2`). Student B is `status = 'pending'`, `seats_reserved = 1`.
+* **Operations & Lock Sequences:**
+  1. *Session 1 ($T_1$, Host Accept):*
+     * Acquires Level 1 row lock: `SELECT available_seats FROM shared_rides WHERE id = ... FOR UPDATE`. Reads `available_seats = 2`.
+     * Acquires Level 2 row lock: `SELECT seats_reserved, status FROM ride_participants WHERE ride_id = ... AND user_id = ... FOR UPDATE`. Reads `status = 'pending'`.
+     * Mutates: Sets `status = 'accepted'`; decrements `available_seats = 2 - 1 = 1`.
+  2. *Session 2 ($T_2$, Rider Cancel):*
+     * Attempts Level 1 row lock: `SELECT ... FROM shared_rides WHERE id = ... FOR UPDATE`.
+     * **Contention & Blocking:** Session 2 blocks waiting for Session 1's Level 1 lock. Deadlock is impossible because both functions acquire Level 1 then Level 2.
+  3. *Winning Transaction:* Session 1 commits first. Participant is now committed as `'accepted'`; `available_seats` is committed as `1`.
+  4. *Session 2 Unblocking & Execution:*
+     * Session 2 acquires Level 1 lock, re-reads committed `available_seats = 1`.
+     * Session 2 acquires Level 2 lock, reads committed `v_current_status = 'accepted'`.
+     * Mutates: Sets `status = 'cancelled'`.
+     * Restores Seats: Because `v_current_status = 'accepted'`, evaluates `available_seats = LEAST(4, 1 + 1) = 2`.
+     * Session 2 commits.
+* **Final State after both transactions commit:**
+  * Participant Status: `'cancelled'`.
+  * `available_seats`: `2`.
+* **Proof of Exactly-Once Restoration:** $T_1$ decremented by 1 (`2 -> 1`); $T_2$ observed `status = 'accepted'` and incremented by 1 (`1 -> 2`). Net change = 0. Repeated invocations of $T_2$ hit the idempotency check `IF v_current_status = 'cancelled'` and return immediately with 0 seats restored.
+
 ```sql
--- SESSION 1 (Host accepts)
+-- SESSION 1 (Host Acceptance - Commits First)
 BEGIN;
 SET LOCAL ROLE authenticated;
 SET LOCAL "request.jwt.claim.sub" = '11111111-1111-1111-1111-111111111111';
 SELECT public.accept_ride_participant('ffffffff-ffff-ffff-ffff-ffffffffffff', '22222222-2222-2222-2222-222222222222');
 
--- SESSION 2 (Student cancels)
+-- SESSION 2 (Rider Cancellation - Attempts Concurrently)
 BEGIN;
 SET LOCAL ROLE authenticated;
 SET LOCAL "request.jwt.claim.sub" = '22222222-2222-2222-2222-222222222222';
 SELECT public.cancel_ride_reservation('ffffffff-ffff-ffff-ffff-ffffffffffff', '22222222-2222-2222-2222-222222222222');
 -- EXPECTED: Session 2 blocks on Level 1 lock (shared_rides FOR UPDATE).
 
-COMMIT; -- in Session 1
--- Session 2 unblocks, reads status = 'accepted', cancels reservation, restores seats.
-COMMIT; -- in Session 2
+COMMIT; -- in Session 1 (Acceptance commits)
+-- Session 2 unblocks, detects committed status = 'accepted', transitions to 'cancelled', restores seat to 2.
+COMMIT; -- in Session 2 (Cancellation commits)
+
+-- Verification Query:
+-- SELECT available_seats FROM public.shared_rides WHERE id = 'ffffffff-ffff-ffff-ffff-ffffffffffff'; -- Returns 2
+-- SELECT status FROM public.ride_participants WHERE ride_id = 'ffffffff-ffff-ffff-ffff-ffffffffffff' AND user_id = '22222222-2222-2222-2222-222222222222'; -- Returns 'cancelled'
+```
+
+#### TEST-CONC-05B: Cancellation vs. Acceptance Race (Ordering 2: Rider Cancel Commits First)
+* **Initial State:** Ride `ffffffff-ffff-ffff-ffff-ffffffffffff` (`total_seats = 4`, `available_seats = 2`). Student B is `status = 'pending'`, `seats_reserved = 1`.
+* **Operations & Lock Sequences:**
+  1. *Session 2 ($T_2$, Rider Cancel):*
+     * Acquires Level 1 row lock: `shared_rides FOR UPDATE`. Reads `available_seats = 2`.
+     * Acquires Level 2 row lock: `ride_participants FOR UPDATE`. Reads `status = 'pending'`.
+     * Mutates: Sets `status = 'cancelled'`.
+     * Seats Evaluation: Because `v_current_status = 'pending'`, zero seats are restored (`available_seats` remains `2`).
+  2. *Session 1 ($T_1$, Host Accept):*
+     * Attempts Level 1 row lock: `shared_rides FOR UPDATE`.
+     * **Contention & Blocking:** Session 1 blocks waiting for Session 2's Level 1 lock.
+  3. *Winning Transaction:* Session 2 commits first. Participant status committed as `'cancelled'`; `available_seats` remains `2`.
+  4. *Session 1 Unblocking & Execution:*
+     * Session 1 acquires Level 1 lock, re-reads `available_seats = 2`.
+     * Session 1 acquires Level 2 lock, reads committed `v_current_status = 'cancelled'`.
+     * Status Validation: Evaluates `IF v_current_status != 'pending'` (TRUE, status is `'cancelled'`).
+     * Abort: Raises custom PL/pgSQL exception **`P0001`**: `RAISE EXCEPTION 'Cannot accept request in status: cancelled (must be pending).'`.
+     * Session 1 rolls back completely.
+* **Final State after both transactions finish:**
+  * Participant Status: `'cancelled'`.
+  * `available_seats`: `2`.
+* **Proof of Exactly-Once Restoration:** Because the reservation was only pending, no seats were decremented; $T_2$ restored 0 seats; $T_1$ aborted, so 0 seats were decremented. Seat inventory remains strictly intact at 2.
+
+```sql
+-- SESSION 2 (Rider Cancellation - Commits First)
+BEGIN;
+SET LOCAL ROLE authenticated;
+SET LOCAL "request.jwt.claim.sub" = '22222222-2222-2222-2222-222222222222';
+SELECT public.cancel_ride_reservation('ffffffff-ffff-ffff-ffff-ffffffffffff', '22222222-2222-2222-2222-222222222222');
+
+-- SESSION 1 (Host Acceptance - Attempts Concurrently)
+BEGIN;
+SET LOCAL ROLE authenticated;
+SET LOCAL "request.jwt.claim.sub" = '11111111-1111-1111-1111-111111111111';
+SELECT public.accept_ride_participant('ffffffff-ffff-ffff-ffff-ffffffffffff', '22222222-2222-2222-2222-222222222222');
+-- EXPECTED: Session 1 blocks on Level 1 lock (shared_rides FOR UPDATE).
+
+COMMIT; -- in Session 2 (Cancellation commits)
+-- Session 1 unblocks, re-reads committed status = 'cancelled', raises P0001:
+-- ERROR: Cannot accept request in status: cancelled (must be pending).
+ROLLBACK; -- in Session 1
 ```
 
 #### TEST-CONC-06: Host Decline vs. Acceptance Race
-* **Setup:** Host clicks Decline in Tab 1 while clicking Accept in Tab 2.
+* **Setup:** Host clicks Decline in Tab 1 while clicking Accept in Tab 2 for the same applicant.
 * **Mechanism:** Both acquire `shared_rides FOR UPDATE` (Level 1). Session 2 blocks on Level 1. Session 1 transitions status to `declined` and commits. Session 2 unblocks, reads `status = 'declined'`, verifies `v_current_status != 'pending'`, and raises custom PL/pgSQL exception **`P0001`**: `Cannot accept request in status: declined (must be pending)`.
 ```sql
 -- SESSION 1 (Host declines)
@@ -2282,27 +2367,61 @@ ROLLBACK; -- in Session 2
 ```
 
 #### TEST-CONC-07: Cart Closure vs. Concurrent Item Insertion Race
-* **Setup:** Cart host locks the cart while a student adds a grocery item.
-* **Mechanism:** Session 1 issues `UPDATE group_carts SET status = 'locked'` (acquires `FOR NO KEY UPDATE` on parent cart tuple). Session 2 executes `INSERT INTO cart_items`. Trigger `trg_enforce_cart_item_lock` fires `BEFORE INSERT` and requests `group_carts FOR SHARE`. Under PostgreSQL, **`FOR SHARE` conflicts with `FOR NO KEY UPDATE`**. Session 2 blocks. Session 1 commits. Session 2 unblocks, re-reads committed `status = 'locked'`, and raises custom PL/pgSQL exception **`P0001`**: `Cart is locked or closed. Items cannot be added, edited, or deleted.`.
+* **Setup:** Cart host locks the cart (`cart_open`) while a student concurrently attempts to insert a grocery item.
+* **Exact Transaction Sequence & Mechanism:**
+  1. *Session 1 ($T_1$, Cart Host):*
+     * Issues `UPDATE group_carts SET status = 'locked' WHERE id = 'cccccccc-cccc-cccc-cccc-cccccccccccc'`.
+     * PostgreSQL acquires an exclusive **`FOR NO KEY UPDATE`** row lock on the cart tuple.
+     * Transaction remains uncommitted.
+  2. *Session 2 ($T_2$, Student adding item):*
+     * Issues `INSERT INTO cart_items (id, cart_id, added_by_user_id, item_name, quantity) VALUES ('99999999-9999-9999-9999-999999999991', 'cccccccc-cccc-cccc-cccc-cccccccccccc', '11111111-1111-1111-1111-111111111111', 'Fresh Bread', 1)`.
+  3. *Trigger Lock Attempt & Blocking Verification:*
+     * Database trigger `trg_enforce_cart_item_lock` fires `BEFORE INSERT`.
+     * Trigger executes: `SELECT status, lock_at INTO v_cart_status, v_lock_at FROM group_carts WHERE id = NEW.cart_id FOR SHARE`.
+     * **Engine Conflict:** Under PostgreSQL's lock compatibility matrix, **`FOR SHARE` strictly conflicts with `FOR NO KEY UPDATE`**.
+     * Session 2 is forced into a `lock_wait` state on the tuple lock and blocks while Session 1 is uncommitted.
+  4. *Session 1 Commit:*
+     * Session 1 commits `status = 'locked'`.
+  5. *Recheck After Lock Acquisition:*
+     * Session 2 unblocks and acquires its `FOR SHARE` row lock.
+     * Under PostgreSQL's `READ COMMITTED` transaction isolation level, `SELECT ... FOR SHARE` re-reads the committed row version.
+     * It reads `v_cart_status = 'locked'`.
+  6. *Rejection Verification:*
+     * Trigger evaluates: `IF v_cart_status != 'open'::group_cart_status OR v_lock_at <= now() THEN RAISE EXCEPTION 'Cart is locked or closed. Items cannot be added, edited, or deleted.'; END IF;`.
+     * Exception raised with SQLSTATE **`P0001`**.
+     * Session 2's transaction is aborted and rolled back.
+  7. *Zero-Item Verification:*
+     * Querying `cart_items` confirms `count = 0`. Zero items were inserted into the locked cart.
+
 ```sql
 -- SESSION 1 (Host locks cart)
 BEGIN;
 SET LOCAL ROLE authenticated;
 SET LOCAL "request.jwt.claim.sub" = '11111111-1111-1111-1111-111111111111';
-UPDATE public.group_carts SET status = 'locked'::group_cart_status WHERE id = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+UPDATE public.group_carts 
+SET status = 'locked'::group_cart_status 
+WHERE id = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+-- (Session 1 holds FOR NO KEY UPDATE lock on parent cart. Do not commit yet.)
 
--- SESSION 2 (Student adds item)
+-- SESSION 2 (Student attempts item insertion)
 BEGIN;
 SET LOCAL ROLE authenticated;
 SET LOCAL "request.jwt.claim.sub" = '11111111-1111-1111-1111-111111111111';
-INSERT INTO public.cart_items (cart_id, added_by_user_id, item_name, quantity)
-VALUES ('cccccccc-cccc-cccc-cccc-cccccccccccc', '11111111-1111-1111-1111-111111111111', 'Fresh Bread', 1);
--- EXPECTED: Trigger trg_enforce_cart_item_lock requests FOR SHARE on parent cart. Blocks.
+INSERT INTO public.cart_items (id, cart_id, added_by_user_id, item_name, quantity)
+VALUES ('99999999-9999-9999-9999-999999999991', 'cccccccc-cccc-cccc-cccc-cccccccccccc', '11111111-1111-1111-1111-111111111111', 'Fresh Bread', 1);
+-- EXPECTED: Trigger trg_enforce_cart_item_lock requests FOR SHARE on parent cart.
+-- FOR SHARE conflicts with FOR NO KEY UPDATE. Session 2 BLOCKS on lock_wait.
 
-COMMIT; -- in Session 1
--- Session 2 unblocks, reads status = 'locked', raises P0001:
--- ERROR: Cart is locked or closed. Items cannot be added, edited, or deleted.
+COMMIT; -- in Session 1 (Cart locked status is committed)
+
+-- EXPECTED RESULT in SESSION 2:
+-- Unblocks, re-reads committed status = 'locked', and aborts with:
+-- ERROR: Cart is locked or closed. Items cannot be added, edited, or deleted. (SQLSTATE: P0001)
 ROLLBACK; -- in Session 2
+
+-- Zero-Item Verification Query (Run as postgres or authenticated):
+-- SELECT count(*) FROM public.cart_items WHERE id = '99999999-9999-9999-9999-999999999991';
+-- EXPECTED: Returns 0.
 ```
 
 ---
@@ -2311,11 +2430,11 @@ ROLLBACK; -- in Session 2
 
 | Category | Count | Status | Operational Notes |
 | :--- | :---: | :---: | :--- |
-| **1. Tests Documented** | **18** | **DOCUMENTED** | 11 Security Control Tests (`TEST-SEC-01` to `SEC-10B`) + 7 Multi-Session Concurrency Tests (`TEST-CONC-01` to `CONC-07`). |
+| **1. Tests Documented** | **19** | **DOCUMENTED** | 11 Security Control Tests (`TEST-SEC-01` to `SEC-10B`) + 8 Multi-Session Concurrency Tests (`TEST-CONC-01` to `CONC-07` including `CONC-05A` and `CONC-05B`). |
 | **2. Tests Executed** | **0** | **NOT EXECUTED** | Standing operational rule: Zero database migrations executed prior to live Supabase credentials provisioning. |
 | **3. Tests Passed** | **0** | **PENDING LIVE EXECUTION** | No test execution claims made based on static documentation review. |
 | **4. Tests Failed** | **0** | **PENDING LIVE EXECUTION** | No test failures recorded; execution awaits live PostgreSQL 15 database instance. |
-| **5. Tests Not Yet Verified** | **18** | **PENDING INDEPENDENT VERIFICATION** | All documented tests await genuine execution against PostgreSQL 15 during Phase 2 setup. |
+| **5. Tests Not Yet Verified** | **19** | **PENDING INDEPENDENT VERIFICATION** | All documented tests await genuine execution against PostgreSQL 15 in local Docker or Supabase CLI. |
 
 ---
 
