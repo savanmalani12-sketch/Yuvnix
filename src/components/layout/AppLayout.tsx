@@ -4,6 +4,7 @@ import { Header } from './Header';
 import { BottomNav } from './BottomNav';
 import { ConfigurationBanner } from '@/components/common/ConfigurationBanner';
 import { UsernameModal } from '@/components/common/UsernameModal';
+import { PWAInstallPrompt } from '@/components/common/PWAInstallPrompt';
 
 export const AppLayout: React.FC = () => {
   return (
@@ -16,6 +17,9 @@ export const AppLayout: React.FC = () => {
 
       {/* Username Setup Prompt for New Users */}
       <UsernameModal />
+
+      {/* PWA Install Prompt Banner */}
+      <PWAInstallPrompt />
 
       {/* Main Page Slot (pb-20 on mobile to leave clearance for bottom nav) */}
       <div className="flex-1 pb-20 md:pb-8">

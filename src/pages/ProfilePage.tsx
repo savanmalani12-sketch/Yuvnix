@@ -6,7 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/hooks/useAuth';
 import { getInitials } from '@/utils/formatters';
-import { Mail, Shield, LogOut, LogIn } from 'lucide-react';
+import { Mail, Shield, LogOut, LogIn, Download } from 'lucide-react';
 
 export const ProfilePage: React.FC = () => {
   const { user, profile, isAuthenticated, signInWithGoogle, signOut } = useAuth();
@@ -69,6 +69,35 @@ export const ProfilePage: React.FC = () => {
                     {user.id}
                   </span>
                 </div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                App &amp; Experience
+              </h4>
+              <div className="p-3.5 rounded-xl bg-primary/5 border border-primary/20 flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <Download className="w-3.5 h-3.5 text-primary" />
+                    <span>Progressive Web App (PWA)</span>
+                  </span>
+                  <p className="text-[11px] text-muted-foreground">
+                    Install to home screen for full-screen mode and faster load times.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    localStorage.removeItem('yuvnix_pwa_dismissed');
+                    window.location.reload();
+                  }}
+                  className="text-xs font-semibold shrink-0 gap-1"
+                >
+                  <Download className="w-3.5 h-3.5 text-primary" />
+                  <span>Install</span>
+                </Button>
               </div>
             </div>
 
