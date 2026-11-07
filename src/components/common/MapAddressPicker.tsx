@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
@@ -56,8 +57,132 @@ interface MapAddressPickerProps {
 
 // Default center: Knowledge Corridor / Gandhinagar
 const DEFAULT_CENTER: [number, number] = [23.1557, 72.6669];
-const DEFAULT_ZOOM = 15;
 export const COMMUNITY_PROXIMITY_RADIUS_METERS = 15;
+
+/**
+ * Dedicated Map Canvas rendered strictly when Dialog is mounted.
+ * Solves Radix UI Portal delay and guarantees non-zero DOM size.
+ */
+interface LeafletMapCanvasProps {
+  center: [number, number];
+  onPositionChange: (lat: number, lng: number) => void;
+  existingCommunities: NearbyCommunityInfo[];
+}
+
+const LeafletMapCanvas: React.FC<LeafletMapCanvasProps> = ({
+  center,
+  onPositionChange,
+  existingCommunities,
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
+
+  // Initialize map when DOM element mounts
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    if (mapRef.current) {
+      mapRef.current.remove();
+      mapRef.current = null;
+    }
+
+    const map = L.map(containerRef.current, {
+      center,
+      zoom: 16,
+      zoomControl: true,
+      fadeAnimation: true,
+    });
+
+    // Carto Voyager high-speed CDN tiles (clean campus & street display)
+    L.tileLayer(
+      'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+      {
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 20,
+      }
+    ).addTo(map);
+
+    const marker = L.marker(center, { draggable: true }).addTo(map);
+
+    marker.on('dragend', (e) => {
+      const pos = e.target.getLatLng();
+      onPositionChange(pos.lat, pos.lng);
+    });
+
+    map.on('click', (e) => {
+      marker.setLatLng(e.latlng);
+      onPositionChange(e.latlng.lat, e.latlng.lng);
+    });
+
+    // Render existing communities and 15m radius circles
+    existingCommunities.forEach((comm) => {
+      if (comm.latitude != null && comm.longitude != null) {
+        L.circle([comm.latitude, comm.longitude], {
+          radius: COMMUNITY_PROXIMITY_RADIUS_METERS,
+          color: '#f59e0b',
+          fillColor: '#f59e0b',
+          fillOpacity: 0.2,
+          weight: 2,
+          dashArray: '4, 4',
+        })
+          .addTo(map)
+          .bindPopup(`<strong>${comm.name}</strong><br/>15m Radius Zone`);
+
+        L.circleMarker([comm.latitude, comm.longitude], {
+          radius: 7,
+          color: '#d97706',
+          fillColor: '#f59e0b',
+          fillOpacity: 1,
+          weight: 2,
+        })
+          .addTo(map)
+          .bindPopup(`<strong>${comm.name}</strong><br/>Existing Residence`);
+      }
+    });
+
+    mapRef.current = map;
+    markerRef.current = marker;
+
+    // Progressive resize calculation to accommodate Dialog open animations
+    const t1 = setTimeout(() => map.invalidateSize(), 80);
+    const t2 = setTimeout(() => map.invalidateSize(), 250);
+    const t3 = setTimeout(() => map.invalidateSize(), 500);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      map.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+    };
+  }, []); // Run once on mount
+
+  // Smoothly pan when center changes from search or locate me
+  useEffect(() => {
+    if (mapRef.current && markerRef.current) {
+      markerRef.current.setLatLng(center);
+      mapRef.current.panTo(center, { animate: true });
+    }
+  }, [center]);
+
+  return (
+    <div className="relative w-full h-[360px] sm:h-[420px] bg-muted/30">
+      <div
+        ref={containerRef}
+        style={{ width: '100%', height: '100%', minHeight: '360px' }}
+        className="w-full h-full"
+      />
+      <div className="absolute top-3 left-3 z-[500] bg-background/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-border/80 shadow-card text-[11px] font-medium text-muted-foreground flex items-center gap-1.5 pointer-events-none">
+        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+        <span>Tap or drag pin to set exact address</span>
+      </div>
+    </div>
+  );
+};
 
 export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   value,
@@ -74,10 +199,13 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<Array<{ display_name: string; lat: string; lon: string }>>([]);
+  const [searchResults, setSearchResults] = useState<
+    Array<{ display_name: string; lat: string; lon: string }>
+  >([]);
   const [isSearching, setIsSearching] = useState(false);
 
-  const nearbyCommunityInMap = React.useMemo(() => {
+  // Check 15m radius proximity to existing communities
+  const nearbyCommunityInMap = useMemo(() => {
     if (!existingCommunities || existingCommunities.length === 0) return null;
     let closest: { community: NearbyCommunityInfo; distance: number } | null = null;
     for (const comm of existingCommunities) {
@@ -97,10 +225,6 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
     }
     return closest;
   }, [currentCoords, existingCommunities]);
-
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
-  const markerRef = useRef<L.Marker | null>(null);
 
   // Reverse geocoding helper using OpenStreetMap Nominatim
   const reverseGeocode = useCallback(async (lat: number, lng: number) => {
@@ -137,18 +261,10 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   }, []);
 
   // Update pin and coordinates
-  const updatePosition = useCallback(
-    (lat: number, lng: number, fetchAddress = true) => {
+  const handlePositionChange = useCallback(
+    (lat: number, lng: number) => {
       setCurrentCoords([lat, lng]);
-      if (markerRef.current) {
-        markerRef.current.setLatLng([lat, lng]);
-      }
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.panTo([lat, lng]);
-      }
-      if (fetchAddress) {
-        reverseGeocode(lat, lng);
-      }
+      reverseGeocode(lat, lng);
     },
     [reverseGeocode]
   );
@@ -165,85 +281,6 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
       reverseGeocode(DEFAULT_CENTER[0], DEFAULT_CENTER[1]);
     }
   };
-
-  // Initialize or re-render map inside modal
-  useEffect(() => {
-    if (!isOpen || !mapContainerRef.current) return;
-
-    if (!mapInstanceRef.current) {
-      const map = L.map(mapContainerRef.current, {
-        center: currentCoords,
-        zoom: DEFAULT_ZOOM,
-        zoomControl: true,
-      });
-
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxZoom: 19,
-      }).addTo(map);
-
-      const marker = L.marker(currentCoords, {
-        draggable: true,
-      }).addTo(map);
-
-      marker.on('dragend', (e) => {
-        const markerPos = e.target.getLatLng();
-        updatePosition(markerPos.lat, markerPos.lng, true);
-      });
-
-      map.on('click', (e) => {
-        updatePosition(e.latlng.lat, e.latlng.lng, true);
-      });
-
-      // Render existing communities & their 15m zones
-      existingCommunities.forEach((comm) => {
-        if (comm.latitude != null && comm.longitude != null) {
-          L.circle([comm.latitude, comm.longitude], {
-            radius: COMMUNITY_PROXIMITY_RADIUS_METERS,
-            color: '#f59e0b',
-            fillColor: '#f59e0b',
-            fillOpacity: 0.15,
-            weight: 1.5,
-            dashArray: '4, 4',
-          })
-            .addTo(map)
-            .bindPopup(`<strong>${comm.name}</strong><br/>15m Radius Zone`);
-
-          L.circleMarker([comm.latitude, comm.longitude], {
-            radius: 6,
-            color: '#f59e0b',
-            fillColor: '#d97706',
-            fillOpacity: 1,
-            weight: 2,
-          })
-            .addTo(map)
-            .bindPopup(`<strong>${comm.name}</strong><br/>Existing Residence`);
-        }
-      });
-
-      mapInstanceRef.current = map;
-      markerRef.current = marker;
-    }
-
-    // Leaflet needs size recalculation after dialog opens
-    const timer = setTimeout(() => {
-      mapInstanceRef.current?.invalidateSize();
-      mapInstanceRef.current?.setView(currentCoords, mapInstanceRef.current.getZoom());
-    }, 250);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [isOpen, currentCoords, updatePosition]);
-
-  // Clean up map when modal closes
-  useEffect(() => {
-    if (!isOpen && mapInstanceRef.current) {
-      mapInstanceRef.current.remove();
-      mapInstanceRef.current = null;
-      markerRef.current = null;
-    }
-  }, [isOpen]);
 
   // Search places using Nominatim
   const handleSearch = async (e: React.FormEvent) => {
@@ -271,10 +308,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
     const lng = parseFloat(result.lon);
     setSearchResults([]);
     setSearchQuery('');
-    updatePosition(lat, lng, true);
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.setView([lat, lng], 16);
-    }
+    handlePositionChange(lat, lng);
   };
 
   // GPS Locate me
@@ -289,10 +323,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
       (pos) => {
         setIsLocating(false);
         const { latitude, longitude } = pos.coords;
-        updatePosition(latitude, longitude, true);
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.setView([latitude, longitude], 17);
-        }
+        handlePositionChange(latitude, longitude);
       },
       () => {
         setIsLocating(false);
@@ -305,7 +336,9 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
   // Confirm selection
   const handleConfirm = () => {
     onChange({
-      address: resolvedAddress || `Pinned Location (${currentCoords[0].toFixed(5)}, ${currentCoords[1].toFixed(5)})`,
+      address:
+        resolvedAddress ||
+        `Pinned Location (${currentCoords[0].toFixed(5)}, ${currentCoords[1].toFixed(5)})`,
       city: resolvedCity || 'Gandhinagar',
       lat: currentCoords[0],
       lng: currentCoords[1],
@@ -372,7 +405,8 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-primary" />
             </h4>
             <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-              Tap to open the interactive map. Pinpoint your hostel, PG, or society to automatically capture the exact verified location.
+              Tap to open the interactive map. Pinpoint your hostel, PG, or society to automatically
+              capture the exact verified location.
             </p>
           </div>
           <div>
@@ -412,7 +446,8 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
                   Pinpoint Residence Location
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground">
-                  Drag the pin or tap anywhere on the map to set your community&apos;s physical address.
+                  Drag the pin or tap anywhere on the map to set your community&apos;s physical
+                  address.
                 </DialogDescription>
               </div>
             </div>
@@ -477,14 +512,14 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
             )}
           </DialogHeader>
 
-          {/* Leaflet Map Canvas */}
-          <div className="relative flex-1 min-h-[340px] sm:min-h-[400px] w-full bg-muted/40">
-            <div ref={mapContainerRef} className="absolute inset-0 z-0 w-full h-full" />
-            <div className="absolute top-3 left-3 z-[400] bg-background/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-border/80 shadow-card text-[11px] font-medium text-muted-foreground flex items-center gap-1.5 pointer-events-none">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Tap or drag marker to set address</span>
-            </div>
-          </div>
+          {/* Leaflet Map Canvas Component mounted only when Dialog is open */}
+          {isOpen && (
+            <LeafletMapCanvas
+              center={currentCoords}
+              onPositionChange={handlePositionChange}
+              existingCommunities={existingCommunities}
+            />
+          )}
 
           {/* Location Summary & Confirm Footer */}
           <div className="p-4 border-t border-border/60 bg-card space-y-3">
@@ -507,6 +542,7 @@ export const MapAddressPicker: React.FC<MapAddressPickerProps> = ({
               </div>
             </div>
 
+            {/* Proximity notice if within 15m */}
             {nearbyCommunityInMap && (
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs flex items-start gap-2.5">
                 <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
