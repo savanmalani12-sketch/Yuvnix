@@ -392,7 +392,7 @@ export const CommunitiesPage: React.FC = () => {
                             setSelectedCommunityForCart(community.id);
                             setIsCreateCartOpen(true);
                           }}
-                          className="h-6 px-2 text-[11px] font-semibold text-primary hover:bg-primary/10 gap-1"
+                          className="h-7 sm:h-6 px-2.5 sm:px-2 text-[11px] font-semibold text-primary hover:bg-primary/10 gap-1"
                         >
                           <Plus className="w-3 h-3" />
                           <span>Start Cart</span>
@@ -442,7 +442,7 @@ export const CommunitiesPage: React.FC = () => {
                                       size="sm"
                                       variant="outline"
                                       onClick={() => setSelectedCartIdForItems(cart.id)}
-                                      className="h-6 text-[11px] px-2 font-medium"
+                                      className="h-7 sm:h-6 text-[11px] px-2.5 sm:px-2 font-medium"
                                     >
                                       View Items
                                     </Button>
@@ -450,8 +450,9 @@ export const CommunitiesPage: React.FC = () => {
                                       size="sm"
                                       variant="ghost"
                                       onClick={() => setSelectedCartForChat({ id: cart.id, title: cart.title })}
-                                      className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                                      className="h-7 w-7 sm:h-6 sm:w-6 p-0 text-muted-foreground hover:text-foreground"
                                       title="Cart Chat"
+                                      aria-label="Open cart group chat"
                                     >
                                       <MessageSquare className="w-3.5 h-3.5" />
                                     </Button>
