@@ -26,7 +26,7 @@ export const HomePage: React.FC = () => {
 
         <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-foreground font-sans leading-[1.15]">
           Your people.{' '}
-          <span className="bg-gradient-to-r from-primary via-indigo-500 to-brand-violet bg-clip-text text-transparent">
+          <span className="text-primary">
             Your community.
           </span>
         </h1>
