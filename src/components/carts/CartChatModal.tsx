@@ -100,7 +100,7 @@ export const CartChatModal: React.FC<CartChatModalProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-md p-6 sm:rounded-2xl max-h-[85vh] h-[550px] flex flex-col">
+      <DialogContent className="max-w-md p-4 sm:p-6 sm:rounded-2xl h-[min(550px,85dvh)] flex flex-col overflow-hidden">
         <DialogHeader className="space-y-1 pb-3 border-b border-border/60">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 flex items-center justify-center">
