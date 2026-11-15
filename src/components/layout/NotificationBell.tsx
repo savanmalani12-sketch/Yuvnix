@@ -120,7 +120,9 @@ export const NotificationBell: React.FC = () => {
         onClick={() => setIsOpen(!isOpen)}
         className="relative p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         title="Notifications"
-        aria-label="Notifications"
+        aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : 'Notifications'}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
       >
         <Bell className="w-4 h-4" />
         {unreadCount > 0 && (
@@ -132,7 +134,11 @@ export const NotificationBell: React.FC = () => {
 
       {/* Notification Popover */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-card border border-border/80 shadow-2xl p-0 z-50 animate-in fade-in slide-in-from-top-2 duration-150 overflow-hidden">
+        <div
+          role="dialog"
+          aria-label="Notifications panel"
+          className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-card border border-border/80 shadow-2xl p-0 z-50 animate-in fade-in slide-in-from-top-2 duration-150 overflow-hidden"
+        >
           {/* Header */}
           <div className="p-3.5 border-b border-border/60 flex items-center justify-between bg-muted/30">
             <div className="flex items-center gap-2">
