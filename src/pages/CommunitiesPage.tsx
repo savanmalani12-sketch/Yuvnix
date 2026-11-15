@@ -30,6 +30,7 @@ import { CartChatModal } from '@/components/carts/CartChatModal';
 
 export const CommunitiesPage: React.FC = () => {
   const [search, setSearch] = useState('');
+  const [selectedType, setSelectedType] = useState<string>('all');
   const [actionError, setActionError] = useState<string | null>(null);
   const [isCreateCartOpen, setIsCreateCartOpen] = useState(false);
   const [selectedCommunityForCart, setSelectedCommunityForCart] = useState<string | undefined>(undefined);
@@ -221,7 +222,17 @@ export const CommunitiesPage: React.FC = () => {
     },
   });
 
+  const counts = {
+    all: communities.length,
+    hostel: communities.filter((c) => c.type === 'hostel').length,
+    pg: communities.filter((c) => c.type === 'pg').length,
+    apartment: communities.filter((c) => c.type === 'apartment').length,
+  };
+
   const filteredCommunities = communities.filter((c) => {
+    if (selectedType !== 'all' && c.type !== selectedType) {
+      return false;
+    }
     const q = search.toLowerCase();
     const nameMatch = c.name.toLowerCase().includes(q);
     const cityMatch = c.city.toLowerCase().includes(q);
@@ -243,16 +254,51 @@ export const CommunitiesPage: React.FC = () => {
         </Link>
       }
     >
-      {/* Search Bar */}
-      <div className="relative mb-6">
-        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <Input
-          type="text"
-          placeholder="Search by hostel, PG name, or landmark..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-10 h-12 bg-card"
-        />
+      {/* Search Bar & Category Filter Chips */}
+      <div className="space-y-3 mb-6">
+        <div className="relative">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            type="text"
+            placeholder="Search by hostel, PG name, or landmark..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-10 h-12 bg-card rounded-2xl border-border/80"
+          />
+        </div>
+
+        {/* Quick Filter Chips */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+          {[
+            { id: 'all', label: 'All Residences', count: counts.all },
+            { id: 'hostel', label: 'Hostels', count: counts.hostel },
+            { id: 'pg', label: 'PGs', count: counts.pg },
+            { id: 'apartment', label: 'Apartments', count: counts.apartment },
+          ].map((chip) => {
+            const isSelected = selectedType === chip.id;
+            return (
+              <button
+                key={chip.id}
+                type="button"
+                onClick={() => setSelectedType(chip.id)}
+                className={`px-3 py-1.5 rounded-full font-medium transition-all flex items-center gap-1.5 shrink-0 border ${
+                  isSelected
+                    ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                    : 'bg-card text-muted-foreground hover:text-foreground border-border/70 hover:border-border'
+                }`}
+              >
+                <span>{chip.label}</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                    isSelected ? 'bg-white/20 text-white' : 'bg-muted text-muted-foreground'
+                  }`}
+                >
+                  {chip.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Action Error Banner */}
