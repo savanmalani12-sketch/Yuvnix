@@ -34,3 +34,7 @@ dist-ssr
 # Cloudflare Pages build artifacts
 .cloudflare
 .wrangler
+
+# Impeccable binaries and local config
+**/scripts/bin/
+.impeccable/*.local.json

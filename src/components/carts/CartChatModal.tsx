@@ -69,12 +69,13 @@ export const CartChatModal: React.FC<CartChatModalProps> = ({
     mutationFn: async () => {
       if (!user || !cartId || !messageText.trim()) return;
 
-      // Ensure user is participant
+      // Ensure user is participant without throwing duplicate conflict
       await supabase
         .from('cart_participants')
-        .insert({ cart_id: cartId, user_id: user.id })
-        .select()
-        .maybeSingle();
+        .upsert(
+          { cart_id: cartId, user_id: user.id },
+          { onConflict: 'cart_id,user_id', ignoreDuplicates: true }
+        );
 
       const { error } = await supabase.from('cart_messages').insert({
         cart_id: cartId,

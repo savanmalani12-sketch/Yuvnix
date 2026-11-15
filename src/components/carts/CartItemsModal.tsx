@@ -199,7 +199,9 @@ export const CartItemsModal: React.FC<CartItemsModalProps> = ({
     const price = item.unit_price_estimate ? Number(item.unit_price_estimate) : 0;
     return sum + price * item.quantity;
   }, 0);
-  const grandTotal = hostAmount + itemsSum;
+  // When items are loaded in cart_items, itemsSum already includes the host's items.
+  // Fall back to hostAmount only if items have not loaded or list is empty.
+  const grandTotal = items.length > 0 ? itemsSum : hostAmount;
 
   const targetGoal = cart?.target_amount ? Number(cart.target_amount) : null;
   const remainingForFree = targetGoal ? Math.max(0, targetGoal - grandTotal) : 0;
