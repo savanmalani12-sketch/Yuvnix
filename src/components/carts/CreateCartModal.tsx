@@ -420,6 +420,7 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
                       <div className="col-span-6">
                         <Input
                           placeholder={`Item ${index + 1} (e.g. Lays, Milk)`}
+                          aria-label={`Item ${index + 1} name`}
                           value={item.name}
                           onChange={(e) => updateHostItemRow(item.id, 'name', e.target.value)}
                           className="h-8 text-xs"
@@ -432,6 +433,7 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
                           min="1"
                           max="99"
                           placeholder="Qty"
+                          aria-label={`Item ${index + 1} quantity`}
                           value={item.qty}
                           onChange={(e) =>
                             updateHostItemRow(item.id, 'qty', parseInt(e.target.value) || 1)
@@ -446,6 +448,7 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
                           min="0"
                           step="0.5"
                           placeholder="₹ Est."
+                          aria-label={`Item ${index + 1} estimated price in rupees`}
                           value={item.price}
                           onChange={(e) => updateHostItemRow(item.id, 'price', e.target.value)}
                           className="h-8 text-xs px-2"
@@ -458,6 +461,7 @@ export const CreateCartModal: React.FC<CreateCartModalProps> = ({
                             onClick={() => removeHostItemRow(item.id)}
                             className="text-muted-foreground hover:text-destructive p-1"
                             title="Remove item"
+                            aria-label={`Remove item ${index + 1}`}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
